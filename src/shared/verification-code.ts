@@ -8,8 +8,8 @@ interface Candidate {
   source: Source;
 }
 
-const KEYWORD = /(?:verification\s*(?:code|number)?|verify|one[-\s]?time\s*(?:passcode|code|password)?|otp|passcode|security\s*code|\bcode\b|验证码|校验码|确认码|动态口令)/gi;
-const NEGATIVE = /(?:order|invoice|tracking|reference|phone|zip|postal|date|expired|过期|订单|物流|金额|发票|手机号|日期)/i;
+const KEYWORD = /(?:verification\s*(?:code|number)?|verify|one[-\s]?time\s*(?:passcode|code|password)?|otp|passcode|security\s*code|\bcode\b|验证码|校验码|确认码|动态口令|验证代码|登入码|安全码)/gi;
+const NEGATIVE = /(?:order|invoice|tracking|reference|phone|zip|postal|date|expired|过期|订单|物流|金额|发票|手机号|日期|copyright|all\s*rights\s*reserved)/i;
 const URL_NEARBY = /https?:\/\/|www\./i;
 const TOKEN = /(?<![A-Za-z0-9])([A-Za-z0-9]{4,8})(?![A-Za-z0-9])/g;
 
@@ -60,13 +60,16 @@ function scoreCandidate(candidate: Candidate, text: string): { score: number; re
     reasons.push('subject_candidate');
   }
   if (distance !== undefined && distance <= 48) {
-    score += Math.max(12, 46 - distance);
+    score += Math.max(15, 48 - distance);
     reasons.push(candidate.source === 'subject' ? 'subject_keyword' : 'nearby_keyword');
   }
-  if (new RegExp(`(?:code|otp|验证码|校验码)\\s*[:：是为-]?\\s*${value}`, 'i').test(local)) {
-    score += 16;
+  if (new RegExp(`(?:code|otp|验证码|校验码|安全码)\\s*[:：是为-]?\\s*${value}`, 'i').test(local)) {
+    score += 18;
     reasons.push('labelled_value');
   }
+
+  const hasKeyword = reasons.includes('nearby_keyword') || reasons.includes('subject_keyword') || reasons.includes('labelled_value');
+
   if (NEGATIVE.test(local)) {
     score -= 35;
     reasons.push('negative_context');
@@ -78,6 +81,11 @@ function scoreCandidate(candidate: Candidate, text: string): { score: number; re
   if (/^\d{4}[-/]\d{1,2}/.test(local) || /\d{1,2}[-/]\d{1,2}[-/]\d{2,4}/.test(local)) {
     score -= 18;
     reasons.push('date_context');
+  }
+
+  // Without explicit OTP keyword, cap the score so random numbers in welcome/notification emails are not misidentified as codes
+  if (!hasKeyword && candidate.source !== 'subject') {
+    score = Math.min(score, 30);
   }
 
   return { score: Math.max(0, Math.min(100, score)), reasons };
@@ -104,7 +112,7 @@ export function extractVerificationCode(input: {
   }
 
   const best = [...byValue.values()].sort((left, right) => right.score - left.score)[0];
-  if (!best || best.score < 35) return undefined;
+  if (!best || best.score < 45) return undefined;
 
   return {
     code: best.candidate.value,
@@ -113,6 +121,6 @@ export function extractVerificationCode(input: {
     receivedAt: new Date(input.receivedAt).toISOString(),
     subject: subject.slice(0, 180) || undefined,
     from: normalizeText(input.from ?? '').slice(0, 160) || undefined,
-    reason: best.reasons.filter((reason) => !reason.startsWith('negative')).slice(0, 4)
+    reason: (best.reasons || []).filter((reason) => !reason.startsWith('negative')).slice(0, 4)
   };
 }

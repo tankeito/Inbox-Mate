@@ -193,7 +193,7 @@ export function createServer(port = PORT) {
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const appError = isInboxMateError(error) ? error : new InboxMateError('INTERNAL', 500);
-    res.status(appError.status).json({ error: safeError(appError.code) });
+    res.status(appError.status).json({ error: safeError(appError.code, appError.customMessage) });
   });
 
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');

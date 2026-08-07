@@ -3,13 +3,18 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ClipboardPaste,
   CloudOff,
   Copy,
   ExternalLink,
+  FileText,
   Filter,
   Inbox,
+  Info,
   KeyRound,
+  Layers,
   LayoutGrid,
   List,
   LoaderCircle,
@@ -67,6 +72,8 @@ interface EmailItem {
   from: string;
   receivedAt: string;
   snippet: string;
+  textBody?: string;
+  htmlBody?: string;
   codeMatch?: MailResult;
 }
 
@@ -117,8 +124,8 @@ const MAX_ACCOUNTS_LIMIT = 50;
 
 const providerDetails: Record<Provider, { label: string; domain: string; authLabel: string; badgeColor: string }> = {
   microsoft: { label: 'Microsoft', domain: 'Outlook / Hotmail', authLabel: 'OAuth 2.0 授权', badgeColor: '#0ea5e9' },
-  gmx: { label: 'GMX 邮箱', domain: 'GMX', authLabel: '应用专用密码', badgeColor: '#3b82f6' },
-  rambler: { label: 'Rambler', domain: 'Rambler 邮箱', authLabel: '应用专用密码', badgeColor: '#8b5cf6' },
+  gmx: { label: 'GMX 邮箱', domain: 'GMX', authLabel: '密码', badgeColor: '#3b82f6' },
+  rambler: { label: 'Rambler', domain: 'Rambler 邮箱', authLabel: '密码', badgeColor: '#8b5cf6' },
 };
 
 const providerDomains: Record<Provider, readonly string[]> = {
@@ -145,8 +152,8 @@ const statusDetails: Record<
   queued: { label: '排队中', tone: 'neutral' },
   connecting: { label: '正在连接', tone: 'working' },
   searching: { label: '正在读取', tone: 'working' },
-  found: { label: '抓取成功', tone: 'success' },
-  no_code: { label: '已完成 (无验证码)', tone: 'success' },
+  found: { label: '已完成', tone: 'success' },
+  no_code: { label: '已完成', tone: 'success' },
   failed: { label: '需要处理', tone: 'danger' },
   cancelled: { label: '已取消', tone: 'warning' },
 };
@@ -200,6 +207,21 @@ function parseAccountLine(line: string): { email: string; secret?: string } | nu
   }
 
   return isEmail(trimmed) ? { email: trimmed } : null;
+}
+
+function parseSingleAccountInput(raw: string): { email: string; provider: Provider; secret: string } | null {
+  const line = raw.trim();
+  if (!line) return null;
+  const parsed = parseAccountLine(line);
+  if (!parsed || !isEmail(parsed.email)) {
+    if (isEmail(line)) {
+      const provider = providerForEmail(line) ?? 'gmx';
+      return { email: line, provider, secret: '' };
+    }
+    return null;
+  }
+  const provider = providerForEmail(parsed.email) ?? 'gmx';
+  return { email: parsed.email, provider, secret: parsed.secret ?? '' };
 }
 
 function stringValue(value: unknown): string | undefined {
@@ -280,6 +302,8 @@ export function App() {
   const [pasteText, setPasteText] = useState('');
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [draft, setDraft] = useState<AccountDraft>(defaultDraft);
+  const [singleRawInput, setSingleRawInput] = useState('');
+  const [queuePage, setQueuePage] = useState(1);
 
   // Left panel mode: single vs batch tab (Requirement 2: Default to single)
   const [addAccountTab, setAddAccountTab] = useState<'single' | 'batch'>('single');
@@ -356,6 +380,8 @@ export function App() {
     };
   }, [accounts]);
 
+  const [feedGroupMode, setFeedGroupMode] = useState<'timeline' | 'grouped'>('timeline');
+
   // Filtered emails based on search & toggles
   const filteredEmails = useMemo(() => {
     return stats.allMails.filter((mail) => {
@@ -373,6 +399,30 @@ export function App() {
       return true;
     });
   }, [stats.allMails, onlyCodeFilter, accountFilter, searchQuery]);
+
+  const groupedEmails = useMemo(() => {
+    const map = new Map<string, EmailItem[]>();
+    for (const mail of filteredEmails) {
+      const list = map.get(mail.accountEmail) || [];
+      list.push(mail);
+      map.set(mail.accountEmail, list);
+    }
+    const result: Array<{ accountEmail: string; provider: Provider; emails: EmailItem[] }> = [];
+    for (const [email, emails] of map.entries()) {
+      const provider = emails[0]?.provider ?? 'gmx';
+      result.push({ accountEmail: email, provider, emails });
+    }
+    return result;
+  }, [filteredEmails]);
+
+  const QUEUE_PAGE_SIZE = 10;
+  const totalQueuePages = Math.max(1, Math.ceil(accounts.length / QUEUE_PAGE_SIZE));
+  const currentQueuePage = Math.min(queuePage, totalQueuePages);
+
+  const paginatedAccounts = useMemo(() => {
+    const start = (currentQueuePage - 1) * QUEUE_PAGE_SIZE;
+    return accounts.slice(start, start + QUEUE_PAGE_SIZE);
+  }, [accounts, currentQueuePage]);
 
   const notify = useCallback((kind: ToastState['kind'], message: string) => {
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
@@ -482,25 +532,20 @@ export function App() {
 
   const addAccount = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const email = draft.email.trim();
-    const detectedProvider = providerForEmail(email);
+    const parsed = parseSingleAccountInput(singleRawInput) ?? (draft.email ? { email: draft.email.trim(), provider: draft.provider, secret: draft.secret.trim() } : null);
+    if (!parsed || !isEmail(parsed.email)) {
+      notify('error', '请粘贴或输入正确的邮箱格式 (例如: 账号----密码)');
+      return;
+    }
     if (accounts.length >= MAX_ACCOUNTS_LIMIT) {
-      notify('info', `单次批量处理最多支持 ${MAX_ACCOUNTS_LIMIT} 个邮箱账户`);
+      notify('info', `单次处理最多支持 ${MAX_ACCOUNTS_LIMIT} 个邮箱账户`);
       return;
     }
-    if (!isEmail(email) || !detectedProvider) {
-      notify('error', '请输入受支持服务商的合法邮箱地址');
+    if (parsed.provider !== 'microsoft' && !parsed.secret) {
+      notify('error', '请填写该邮箱密码');
       return;
     }
-    if (detectedProvider !== draft.provider) {
-      notify('error', '选择的服务商与邮箱地址后缀不符');
-      return;
-    }
-    if (draft.provider !== 'microsoft' && !draft.secret.trim()) {
-      notify('error', '请填写该邮箱的应用专用密码');
-      return;
-    }
-    if (accounts.some((account) => accountKey(account.email) === accountKey(email))) {
+    if (accounts.some((account) => accountKey(account.email) === accountKey(parsed.email))) {
       notify('info', '该邮箱已在队列中');
       return;
     }
@@ -509,16 +554,17 @@ export function App() {
       ...current,
       {
         id: createId(),
-        email,
-        provider: draft.provider,
-        credentialType: credentialForProvider(draft.provider),
-        secret: draft.provider === 'microsoft' ? '' : draft.secret,
-        oauthState: draft.provider === 'microsoft' ? 'not_started' : undefined,
+        email: parsed.email,
+        provider: parsed.provider,
+        credentialType: credentialForProvider(parsed.provider),
+        secret: parsed.provider === 'microsoft' ? (parsed.secret || '') : parsed.secret,
+        oauthState: parsed.provider === 'microsoft' ? 'not_started' : undefined,
         status: 'draft',
       },
     ]);
+    setSingleRawInput('');
     setDraft(defaultDraft);
-    notify('success', `已添加 ${email}`);
+    notify('success', `已添加 ${parsed.email}`);
   };
 
   const removeAccount = (id: string) => {
@@ -758,7 +804,7 @@ export function App() {
       })),
     );
     try {
-      const token = await csrfToken();
+      const token = await loadSession();
       const response = await fetch('/api/v1/jobs', {
         method: 'POST',
         cache: 'no-store',
@@ -842,7 +888,7 @@ export function App() {
           <div>
             <div className="brand-title">
               <h1>Inbox Mate</h1>
-              <span className="brand-badge">PRO BATCH</span>
+              <span className="brand-badge">PRO</span>
             </div>
             <p className="brand-sub">专业级多账户邮件读取与检索工具</p>
           </div>
@@ -987,59 +1033,55 @@ export function App() {
             {/* Tab 1: Single Account Form (Default) */}
             {addAccountTab === 'single' ? (
               <form onSubmit={addAccount} className="tab-form-content">
-                <div className="form-grid">
-                  <div className="form-field full-width">
-                    <label htmlFor="input-email">邮箱地址</label>
-                    <input
-                      id="input-email"
-                      value={draft.email}
-                      onChange={(event) => {
-                        const email = event.target.value;
-                        const detected = providerForEmail(email);
-                        setDraft((current) => ({ ...current, email, provider: detected ?? current.provider }));
-                      }}
-                      type="email"
-                      autoComplete="off"
-                      placeholder="name@example.com"
-                      disabled={isRunning}
-                    />
-                  </div>
-                  <div className="form-field">
-                    <label>服务商</label>
-                    <SelectField
-                      value={draft.provider}
-                      onChange={(val) => setDraft((curr) => ({ ...curr, provider: val as Provider, secret: '' }))}
-                      disabled={isRunning}
-                      ariaLabel="服务商选择"
-                    >
-                      <option value="microsoft">Microsoft</option>
-                      <option value="gmx">GMX 邮箱</option>
-                      <option value="rambler">Rambler</option>
-                    </SelectField>
-                  </div>
-                  <div className="form-field">
-                    <label>验证类型</label>
-                    <span className="auth-type-pill">{providerDetails[draft.provider].authLabel}</span>
-                  </div>
-                  {draft.provider !== 'microsoft' && (
-                    <div className="form-field full-width">
-                      <label htmlFor="input-secret">应用专用密码</label>
-                      <input
-                        id="input-secret"
-                        value={draft.secret}
-                        onChange={(event) => setDraft((current) => ({ ...current, secret: event.target.value }))}
-                        type="password"
-                        autoComplete="new-password"
-                        placeholder="粘贴应用密码"
-                        disabled={isRunning}
-                      />
-                    </div>
-                  )}
+                <div className="form-field full-width">
+                  <label htmlFor="input-single-raw">粘贴或输入账号信息 (邮箱地址----应用密码)</label>
+                  <input
+                    id="input-single-raw"
+                    value={singleRawInput}
+                    onChange={(event) => {
+                      const val = event.target.value;
+                      setSingleRawInput(val);
+                      const parsed = parseSingleAccountInput(val);
+                      if (parsed) {
+                        setDraft({ email: parsed.email, provider: parsed.provider, secret: parsed.secret });
+                      }
+                    }}
+                    type="text"
+                    autoComplete="off"
+                    placeholder="邮箱地址----应用密码"
+                    disabled={isRunning}
+                  />
                 </div>
-                <button className="btn btn-emerald full-width mt-1" type="submit" disabled={isRunning}>
+
+                {draft.email && (
+                  <div className="auto-parsed-preview-bar">
+                    <span className="parsed-label">智能识别:</span>
+                    <span className="parsed-email">{draft.email}</span>
+                    <span className={`provider-pill provider-${draft.provider}`}>
+                      {providerDetails[draft.provider].label}
+                    </span>
+                  </div>
+                )}
+
+                <button className="btn btn-emerald full-width mt-1" type="submit" disabled={isRunning || !singleRawInput.trim()}>
                   <Plus size={15} />
                   <span>加入账号队列</span>
                 </button>
+
+                {/* Format Guide Box (GMX & Rambler Focus) */}
+                <div className="format-guide-box">
+                  <div className="format-guide-title">
+                    <FileText size={13} />
+                    <span>格式说明：</span>
+                  </div>
+                  <p className="format-guide-sub">请按照 <code>邮箱地址----应用密码</code> 格式输入：</p>
+                  <div className="format-item">
+                    <span className="fmt-label">GMX 邮箱:</span> <code>name@gmx.com----密码</code>
+                  </div>
+                  <div className="format-item">
+                    <span className="fmt-label">Rambler 邮箱:</span> <code>name@rambler.ru----密码</code>
+                  </div>
+                </div>
               </form>
             ) : (
               /* Tab 2: Batch Import Form (Taller Textarea Height) */
@@ -1048,7 +1090,7 @@ export function App() {
                   className="batch-textarea batch-textarea-tall"
                   value={pasteText}
                   onChange={(event) => setPasteText(event.target.value)}
-                  placeholder={`邮箱@gmx.com----应用专用密码\n邮箱@outlook.com\n邮箱@rambler.ru:应用专用密码`}
+                  placeholder={`邮箱@gmx.com----密码\n邮箱@outlook.com\n邮箱@rambler.ru:密码`}
                   spellCheck={false}
                   autoComplete="off"
                   disabled={isRunning}
@@ -1092,22 +1134,49 @@ export function App() {
                 <UserCheck size={15} className="text-cyan" />
                 <span>账号队列 ({accounts.length})</span>
               </div>
-              {accounts.length > 0 && !isRunning && (
-                <button
-                  className="btn btn-xs btn-outline-danger"
-                  type="button"
-                  onClick={() => setAccounts([])}
-                  title="清空队列中的所有账号"
-                >
-                  <Trash2 size={11} />
-                  <span>清空全部</span>
-                </button>
+              {accounts.length > 0 && (
+                <div className="queue-header-actions">
+                  {totalQueuePages > 1 && (
+                    <div className="queue-pagination-ctrls">
+                      <span className="queue-page-text">{currentQueuePage}/{totalQueuePages}页</span>
+                      <button
+                        type="button"
+                        className="queue-page-btn"
+                        onClick={() => setQueuePage((p) => Math.max(1, p - 1))}
+                        disabled={currentQueuePage <= 1}
+                        title="上一页"
+                      >
+                        <ChevronLeft size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        className="queue-page-btn"
+                        onClick={() => setQueuePage((p) => Math.min(totalQueuePages, p + 1))}
+                        disabled={currentQueuePage >= totalQueuePages}
+                        title="下一页"
+                      >
+                        <ChevronRight size={11} />
+                      </button>
+                    </div>
+                  )}
+                  {!isRunning && (
+                    <button
+                      className="btn btn-xs btn-outline-danger"
+                      type="button"
+                      onClick={() => { setAccounts([]); setQueuePage(1); }}
+                      title="清空队列中的所有账号"
+                    >
+                      <Trash2 size={11} />
+                      <span>清空全部</span>
+                    </button>
+                  )}
+                </div>
               )}
             </div>
 
             <div className="queue-scroll-container">
-              {accounts.length > 0 ? (
-                accounts.map((account) => (
+              {paginatedAccounts.length > 0 ? (
+                paginatedAccounts.map((account) => (
                   <AccountQueueCard
                     key={account.id}
                     account={account}
@@ -1241,8 +1310,28 @@ export function App() {
                     onChange={(e) => setOnlyCodeFilter(e.target.checked)}
                   />
                   <span className="toggle-slider"></span>
-                  <span className="toggle-label">仅看含验证码邮件</span>
+                  <span className="toggle-label">仅验证码</span>
                 </label>
+
+                <div className="group-mode-toggle-pill">
+                  <button
+                    type="button"
+                    className={`mode-btn ${feedGroupMode === 'timeline' ? 'active' : ''}`}
+                    onClick={() => setFeedGroupMode('timeline')}
+                    title="平铺时间流"
+                  >
+                    <span>平铺流</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`mode-btn ${feedGroupMode === 'grouped' ? 'active' : ''}`}
+                    onClick={() => setFeedGroupMode('grouped')}
+                    title="按邮箱分组"
+                  >
+                    <Layers size={13} />
+                    <span>按邮箱分组</span>
+                  </button>
+                </div>
 
                 <div className="view-mode-toggle">
                   <button
@@ -1267,16 +1356,30 @@ export function App() {
           </div>
 
           {/* Email Cards Feed Grid */}
-          <div className={`feed-scroll-container view-${feedViewMode}`}>
+          <div className={`feed-scroll-container view-${feedViewMode} display-${feedGroupMode}`}>
             {filteredEmails.length > 0 ? (
-              filteredEmails.map((mail) => (
-                <EmailCard
-                  key={mail.id}
-                  email={mail}
-                  onOpenModal={() => setSelectedMailModal(mail)}
-                  onCopyCode={(code) => void copyCode(code)}
-                />
-              ))
+              feedGroupMode === 'grouped' ? (
+                groupedEmails.map((group) => (
+                  <AccountGroupCard
+                    key={group.accountEmail}
+                    accountEmail={group.accountEmail}
+                    provider={group.provider}
+                    emails={group.emails}
+                    viewMode={feedViewMode}
+                    onOpenModal={(mail) => setSelectedMailModal(mail)}
+                    onCopyCode={(code) => void copyCode(code)}
+                  />
+                ))
+              ) : (
+                filteredEmails.map((mail) => (
+                  <EmailCard
+                    key={mail.id}
+                    email={mail}
+                    onOpenModal={() => setSelectedMailModal(mail)}
+                    onCopyCode={(code) => void copyCode(code)}
+                  />
+                ))
+              )
             ) : (
               <div className="feed-empty-state">
                 <Inbox size={48} className="empty-icon text-muted" />
@@ -1485,7 +1588,7 @@ function AccountQueueCard({
               if (isEditingSecret) onEditSecretChange(e.target.value);
               else onSaveEditSecret(e.target.value);
             }}
-            placeholder="输入应用专用密码"
+            placeholder="输入密码"
             autoFocus={isEditingSecret}
           />
           {isEditingSecret && (
@@ -1541,6 +1644,72 @@ function StatusChip({ status }: { status: AccountStatus }) {
   );
 }
 
+function AccountGroupCard({
+  accountEmail,
+  provider,
+  emails,
+  viewMode,
+  onOpenModal,
+  onCopyCode,
+}: {
+  accountEmail: string;
+  provider: Provider;
+  emails: EmailItem[];
+  viewMode: 'grid' | 'list';
+  onOpenModal: (mail: EmailItem) => void;
+  onCopyCode: (code: string) => void;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const providerInfo = providerDetails[provider];
+  const primaryCode = emails.find(
+    (item) => item.codeMatch?.code && item.codeMatch?.confidence !== 'low'
+  )?.codeMatch;
+
+  return (
+    <div className="account-group-container">
+      <div className="account-group-header" onClick={() => setCollapsed(!collapsed)}>
+        <div className="group-header-left">
+          <button className="group-collapse-btn" type="button">
+            <ChevronDown size={16} className={`collapse-arrow ${collapsed ? 'collapsed' : ''}`} />
+          </button>
+          <span className="group-account-email">{accountEmail}</span>
+          <span className={`provider-pill provider-${provider}`}>{providerInfo.label}</span>
+          <span className="group-count-badge">{emails.length} 封邮件</span>
+        </div>
+        <div className="group-header-right">
+          {primaryCode && (
+            <div
+              className="group-code-pill"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (primaryCode?.code) onCopyCode(primaryCode.code);
+              }}
+              title="点击复制该邮箱最新验证码"
+            >
+              <Sparkles size={12} />
+              <span>验证码: <strong>{primaryCode.code}</strong></span>
+              <Copy size={12} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {!collapsed && (
+        <div className={`group-emails-wrapper view-${viewMode}`}>
+          {emails.map((mail) => (
+            <EmailCard
+              key={mail.id}
+              email={mail}
+              onOpenModal={() => onOpenModal(mail)}
+              onCopyCode={onCopyCode}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EmailCard({
   email,
   onOpenModal,
@@ -1550,7 +1719,7 @@ function EmailCard({
   onOpenModal: () => void;
   onCopyCode: (code: string) => void;
 }) {
-  const hasCode = Boolean(email.codeMatch?.code);
+  const hasCode = Boolean(email.codeMatch?.code && email.codeMatch?.confidence !== 'low');
 
   return (
     <article className={`email-card ${hasCode ? 'has-code' : ''}`}>
@@ -1617,53 +1786,120 @@ function EmailReaderModal({
   onClose: () => void;
   onCopyCode: (code: string) => void;
 }) {
+  const [viewTab, setViewTab] = useState<'html' | 'text'>(email.htmlBody ? 'html' : 'text');
+  const [copied, setCopied] = useState(false);
   const hasCode = Boolean(email.codeMatch?.code);
+  const isHighConfidence = email.codeMatch?.confidence === 'high' || email.codeMatch?.confidence === 'medium';
+  const providerLabel = email.provider === 'microsoft' ? 'Microsoft' : email.provider === 'gmx' ? 'GMX' : 'Rambler';
+
+  const handleCopy = () => {
+    if (email.codeMatch?.code) {
+      onCopyCode(email.codeMatch.code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-container" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <div className="modal-title-group">
-            <span className="modal-account-pill">{email.accountEmail}</span>
-            <h3 className="modal-subject">{email.subject}</h3>
+      <div className="modal-container saas-detail-modal" onClick={(e) => e.stopPropagation()}>
+        {/* Header Bar */}
+        <div className="modal-header-bar">
+          <div className="header-meta-left">
+            <span className={`provider-pill provider-${email.provider}`}>
+              {providerLabel}
+            </span>
+            <span className="account-tag-pill">
+              <Mail size={12} />
+              <span>{email.accountEmail}</span>
+            </span>
           </div>
-          <button className="icon-btn modal-close-btn" type="button" onClick={onClose}>
+          <button className="icon-btn modal-close-btn" type="button" onClick={onClose} title="关闭 (Esc)">
             <X size={18} />
           </button>
         </div>
 
-        <div className="modal-meta-grid">
-          <div>
-            <span className="meta-label">发件人</span>
-            <span className="meta-value">{email.from}</span>
-          </div>
-          <div>
-            <span className="meta-label">接收时间</span>
-            <span className="meta-value">{timestampLabel(email.receivedAt)} ({email.receivedAt})</span>
+        {/* Subject & Hero Meta */}
+        <div className="modal-hero-meta">
+          <h2 className="modal-subject-title">{email.subject}</h2>
+          <div className="modal-sender-row">
+            <div className="sender-avatar">
+              {(email.from[0] || 'M').toUpperCase()}
+            </div>
+            <div className="sender-info">
+              <span className="sender-name">{email.from}</span>
+              <span className="receiver-target">至 {email.accountEmail}</span>
+            </div>
+            <span className="modal-timestamp">{timestampLabel(email.receivedAt)} ({email.receivedAt})</span>
           </div>
         </div>
 
+        {/* OTP Code Hero Banner */}
         {hasCode && (
-          <div className="modal-code-banner">
-            <div>
-              <span className="banner-label">已检测到的验证码</span>
-              <div className="banner-code">{email.codeMatch?.code}</div>
+          <div className={`modal-code-hero ${isHighConfidence ? 'confidence-hero-emerald' : 'confidence-hero-neutral'}`}>
+            <div className="code-hero-content">
+              <div className="code-hero-badge">
+                {isHighConfidence ? <Sparkles size={14} /> : <Info size={14} />}
+                <span>
+                  {isHighConfidence ? '⚡ 核心提取验证码' : '信息提示: 包含候选 6 位数字'}
+                </span>
+              </div>
+              <div className="code-hero-digits">{email.codeMatch?.code}</div>
+              {!isHighConfidence && (
+                <span className="code-hero-subtext">该邮件为注册/通知类邮件，此数字提取自正文链接或候选参考号</span>
+              )}
             </div>
-            <button
-              className="btn btn-emerald btn-lg"
-              type="button"
-              onClick={() => email.codeMatch?.code && onCopyCode(email.codeMatch.code)}
-            >
-              <Copy size={18} />
-              <span>复制验证码</span>
+            <button className={`btn btn-copy-hero ${copied ? 'copied' : ''}`} type="button" onClick={handleCopy}>
+              {copied ? <Check size={16} /> : <Copy size={16} />}
+              <span>{copied ? '已复制' : '一键复制'}</span>
             </button>
           </div>
         )}
 
-        {/* Safe plain text viewer */}
-        <div className="modal-body-content">
-          <span className="body-label">邮件正文文本内容</span>
-          <pre className="safe-text-renderer">{email.snippet}</pre>
+        {/* Content Format Toggle Tabs */}
+        <div className="modal-view-tabs">
+          {email.htmlBody && (
+            <button
+              className={`view-tab-btn ${viewTab === 'html' ? 'active' : ''}`}
+              type="button"
+              onClick={() => setViewTab('html')}
+            >
+              <Sparkles size={13} />
+              <span>富文本视图 (HTML)</span>
+            </button>
+          )}
+          <button
+            className={`view-tab-btn ${viewTab === 'text' ? 'active' : ''}`}
+            type="button"
+            onClick={() => setViewTab('text')}
+          >
+            <FileText size={13} />
+            <span>纯文本视图 (Text)</span>
+          </button>
+        </div>
+
+        {/* Mail Content Viewer Area */}
+        <div className="modal-content-viewport">
+          {viewTab === 'html' && email.htmlBody ? (
+            <iframe
+              className="email-html-iframe"
+              srcDoc={email.htmlBody}
+              title="Email HTML Body"
+              sandbox="allow-popups allow-popups-to-escape-sandbox"
+            />
+          ) : (
+            <div className="email-text-renderer">
+              {email.textBody || email.snippet || '(无正文内容)'}
+            </div>
+          )}
         </div>
       </div>
     </div>

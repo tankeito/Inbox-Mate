@@ -10,8 +10,8 @@ const accountSchema = z
   .object({
     clientAccountId: clientAccountIdSchema,
     email: z.string().trim().email().max(320),
-    provider: providerSchema,
-    auth: z.discriminatedUnion('type', [
+    provider: providerSchema.optional(),
+    auth: z.union([
       z.object({ type: z.literal('app_password'), secret: z.string().min(1).max(1024) }),
       z.object({ type: z.literal('oauth_session'), sessionId: z.string().min(1).max(256) })
     ])
@@ -29,27 +29,44 @@ const createJobSchema = z
 export function parseCreateJobInput(body: unknown): CreateJobInput {
   const result = createJobSchema.safeParse(body);
   if (!result.success) {
-    console.error('Zod validation failed on POST /api/v1/jobs:', JSON.stringify(result.error.issues, null, 2));
-    throw new InboxMateError('BAD_REQUEST');
+    const details = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+    console.error('[ZOD FAIL]:', details);
+    throw new InboxMateError('BAD_REQUEST', 400, `请求参数无效: ${details}`);
   }
 
   const seen = new Set<string>();
-  const accounts = result.data.accounts.map((account) => {
+  const accounts: AccountInput[] = [];
+
+  for (const account of result.data.accounts) {
     const email = normalizeEmail(account.email);
-    const profile = providerForEmail(email);
-    if (!profile || profile.id !== account.provider) throw new InboxMateError('UNSUPPORTED_PROVIDER');
-    if (seen.has(email)) throw new InboxMateError('BAD_REQUEST');
+    if (seen.has(email)) continue; // Auto-deduplicate
     seen.add(email);
 
-    if (profile.auth === 'oauth2' && account.auth.type !== 'oauth_session') {
-      throw new InboxMateError('AUTH_REQUIRED');
-    }
-    if (profile.auth === 'app_password' && account.auth.type !== 'app_password') {
-      throw new InboxMateError('AUTH_REQUIRED');
+    const profile = providerForEmail(email);
+    if (!profile) {
+      throw new InboxMateError('UNSUPPORTED_PROVIDER', 400, `不支持的邮箱域名: ${email}`);
     }
 
-    return { ...account, email, provider: profile.id as ProviderId } as AccountInput;
-  });
+    // Auto-correct provider to match email domain
+    const providerId = profile.id;
+
+    if (profile.auth === 'oauth2' && account.auth.type !== 'oauth_session') {
+      throw new InboxMateError('AUTH_REQUIRED', 400, `邮箱 ${email} 需要微软 OAuth 授权`);
+    }
+    if (profile.auth === 'app_password' && account.auth.type !== 'app_password') {
+      throw new InboxMateError('AUTH_REQUIRED', 400, `邮箱 ${email} 需要填写应用专用密码`);
+    }
+
+    accounts.push({
+      ...account,
+      email,
+      provider: providerId as ProviderId
+    } as AccountInput);
+  }
+
+  if (!accounts.length) {
+    throw new InboxMateError('BAD_REQUEST', 400, '队列中没有有效的邮箱账户');
+  }
 
   return {
     accounts,

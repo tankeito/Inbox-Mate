@@ -2,7 +2,7 @@ import type { AccountError, SafeErrorCode } from '../shared/types.js';
 
 const ERROR_MESSAGES: Record<SafeErrorCode, string> = {
   BAD_REQUEST: '请求参数无效。',
-  UNSUPPORTED_PROVIDER: '该邮箱域名不在本机 MVP 支持列表中。',
+  UNSUPPORTED_PROVIDER: '该邮箱域名不在本机支持列表中。',
   AUTH_REQUIRED: '需要完成邮箱授权后才能继续。',
   AUTH_DENIED: '邮箱授权被拒绝或已取消。',
   AUTH_EXPIRED: '邮箱授权已过期，请重新授权。',
@@ -16,17 +16,21 @@ const ERROR_MESSAGES: Record<SafeErrorCode, string> = {
 };
 
 export class InboxMateError extends Error {
+  public readonly customMessage?: string;
+
   constructor(
     public readonly code: SafeErrorCode,
-    public readonly status = 400
+    public readonly status = 400,
+    customMessage?: string
   ) {
-    super(ERROR_MESSAGES[code]);
+    super(customMessage ?? ERROR_MESSAGES[code]);
     this.name = 'InboxMateError';
+    this.customMessage = customMessage;
   }
 }
 
-export function safeError(code: SafeErrorCode): AccountError {
-  return { code, message: ERROR_MESSAGES[code] };
+export function safeError(code: SafeErrorCode, customMessage?: string): AccountError {
+  return { code, message: customMessage ?? ERROR_MESSAGES[code] };
 }
 
 export function isInboxMateError(value: unknown): value is InboxMateError {

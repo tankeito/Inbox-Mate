@@ -52,8 +52,17 @@ function isTerminal(state: JobState): boolean {
 function cloneAccount(account: AccountSnapshot): AccountSnapshot {
   return {
     ...account,
-    messages: account.messages ? account.messages.map((item) => ({ ...item, codeMatch: item.codeMatch ? { ...item.codeMatch, reason: [...item.codeMatch.reason] } : undefined })) : undefined,
-    result: account.result ? { ...account.result, reason: [...account.result.reason] } : undefined,
+    messages: account.messages
+      ? account.messages.map((item) => ({
+          ...item,
+          codeMatch: item.codeMatch
+            ? { ...item.codeMatch, reason: Array.isArray(item.codeMatch?.reason) ? [...item.codeMatch.reason] : [] }
+            : undefined
+        }))
+      : undefined,
+    result: account.result
+      ? { ...account.result, reason: Array.isArray(account.result?.reason) ? [...account.result.reason] : [] }
+      : undefined,
     error: account.error ? { ...account.error } : undefined
   };
 }

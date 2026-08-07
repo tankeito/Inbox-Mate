@@ -69,6 +69,8 @@ export interface EmailItem {
   from: string;
   receivedAt: string;
   snippet: string;
+  textBody?: string;
+  htmlBody?: string;
   codeMatch?: CodeMatch;
 }
 

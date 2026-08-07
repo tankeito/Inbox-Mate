@@ -52,15 +52,22 @@ async function streamToBuffer(stream: AsyncIterable<Buffer | string>, signal: Ab
   return Buffer.concat(chunks);
 }
 
-async function decodeTextPart(content: Buffer, contentType: string): Promise<string> {
+interface DecodedPart {
+  text: string;
+  html?: string;
+}
+
+async function decodeTextPart(content: Buffer, contentType: string): Promise<DecodedPart> {
   // The IMAP download stream has already handled transfer encoding and charset.
-  // MailParser safely converts the supplied plain or HTML fragment into text only.
+  // MailParser safely converts the supplied plain or HTML fragment into text and HTML.
   const source = Buffer.concat([
     Buffer.from(`Content-Type: ${contentType}; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n`, 'utf8'),
     content
   ]);
-  const parsed = await simpleParser(source, { skipHtmlToText: false, skipImageLinks: true });
-  return (parsed.text ?? '').replace(/\u0000/g, ' ').slice(0, MAX_TEXT_PART_BYTES);
+  const parsed = await simpleParser(source, { skipHtmlToText: false, skipImageLinks: false });
+  const text = (parsed.text ?? '').replace(/\u0000/g, ' ').slice(0, MAX_TEXT_PART_BYTES);
+  const html = typeof parsed.html === 'string' && parsed.html.trim() ? parsed.html.slice(0, MAX_TEXT_PART_BYTES) : undefined;
+  return { text, html };
 }
 
 function asDate(value: FetchMessageObject['internalDate']): Date | undefined {
@@ -150,7 +157,9 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
     for (const candidate of candidates.sort((left, right) => right.receivedAt.getTime() - left.receivedAt.getTime()).slice(0, options.maxMessages)) {
       if (options.signal.aborted) throw new InboxMateError('CANCELLED');
       const textParts = selectTextParts(candidate.bodyStructure).slice(0, 2);
-      let text = '';
+      let textBody = '';
+      let htmlBody: string | undefined = undefined;
+
       for (const part of textParts) {
         const download = await client.download(candidate.uid.toString(), part.part, {
           uid: true,
@@ -158,17 +167,20 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
           chunkSize: 32 * 1024
         });
         const raw = await streamToBuffer(download.content as AsyncIterable<Buffer | string>, options.signal);
-        text += `\n${await decodeTextPart(raw, part.type)}`;
+        const decoded = await decodeTextPart(raw, part.type);
+        if (decoded.text) textBody += (textBody ? '\n\n' : '') + decoded.text;
+        if (decoded.html && !htmlBody) htmlBody = decoded.html;
       }
+
       const match = extractVerificationCode({
         subject: candidate.subject,
-        text,
+        text: textBody,
         receivedAt: candidate.receivedAt,
         from: candidate.from
       });
       if (match) matches.push(match);
 
-      const snippet = text.trim().replace(/\s+/g, ' ').slice(0, 600);
+      const snippet = textBody.trim().replace(/\s+/g, ' ').slice(0, 300);
       emailItems.push({
         id: `${account.clientAccountId}-${candidate.uid}`,
         accountEmail: account.email,
@@ -177,6 +189,8 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
         from: candidate.from || account.email,
         receivedAt: candidate.receivedAt.toISOString(),
         snippet: snippet || '(无正文预览)',
+        textBody: textBody.trim() || undefined,
+        htmlBody: htmlBody || undefined,
         codeMatch: match
       });
     }
