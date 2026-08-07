@@ -1,4 +1,4 @@
-export const PROVIDER_IDS = ['microsoft', 'gmx', 'rambler'] as const;
+export const PROVIDER_IDS = ['microsoft', 'gmx', 'rambler', 'mailru'] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type JobState = 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
@@ -36,7 +36,13 @@ export interface OAuthSessionAuthInput {
   sessionId: string;
 }
 
-export type AccountAuthInput = AppPasswordAuthInput | OAuthSessionAuthInput;
+export interface RefreshTokenAuthInput {
+  type: 'refresh_token';
+  refreshToken: string;
+  clientId?: string;
+}
+
+export type AccountAuthInput = AppPasswordAuthInput | OAuthSessionAuthInput | RefreshTokenAuthInput;
 
 export interface AccountInput {
   clientAccountId: string;

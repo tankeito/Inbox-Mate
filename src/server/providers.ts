@@ -14,6 +14,7 @@ const MICROSOFT_DOMAINS = [
   'hotmail.com',
   'live.com',
   'msn.com',
+  'offilive.com',
   'outlook.de',
   'outlook.jp',
   'outlook.co.uk',
@@ -23,6 +24,7 @@ const MICROSOFT_DOMAINS = [
 
 const GMX_DOMAINS = ['gmx.com', 'gmx.net', 'gmx.de', 'gmx.at', 'gmx.ch', 'gmx.fr', 'gmx.co.uk', 'gmx.us', 'gmx.info'] as const;
 const RAMBLER_DOMAINS = ['rambler.ru', 'myrambler.ru', 'ro.ru', 'lenta.ru', 'autorambler.ru'] as const;
+const MAILRU_DOMAINS = ['mail.ru', 'inbox.ru', 'list.ru', 'bk.ru', 'internet.ru'] as const;
 
 export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
   microsoft: {
@@ -47,6 +49,14 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'imap.rambler.ru',
     port: 993,
     domains: RAMBLER_DOMAINS,
+    auth: 'app_password'
+  },
+  mailru: {
+    id: 'mailru',
+    label: 'Mail.ru',
+    host: 'imap.mail.ru',
+    port: 993,
+    domains: MAILRU_DOMAINS,
     auth: 'app_password'
   }
 };

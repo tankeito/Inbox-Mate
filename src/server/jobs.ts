@@ -73,7 +73,8 @@ export class JobManager {
   private readonly providerLimits: Record<ProviderId, ReturnType<typeof pLimit>> = {
     microsoft: pLimit(4),
     gmx: pLimit(4),
-    rambler: pLimit(4)
+    rambler: pLimit(4),
+    mailru: pLimit(4)
   };
 
   constructor(private readonly runAccount: JobAccountRunner) {}

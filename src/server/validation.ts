@@ -3,7 +3,7 @@ import { InboxMateError } from './errors.js';
 import { normalizeEmail, providerForEmail } from './providers.js';
 import type { AccountInput, CreateJobInput, ProviderId } from '../shared/types.js';
 
-const providerSchema = z.enum(['microsoft', 'gmx', 'rambler']);
+const providerSchema = z.enum(['microsoft', 'gmx', 'rambler', 'mailru']);
 const clientAccountIdSchema = z.string().min(1).max(128);
 
 const accountSchema = z
@@ -13,7 +13,8 @@ const accountSchema = z
     provider: providerSchema.optional(),
     auth: z.union([
       z.object({ type: z.literal('app_password'), secret: z.string().min(1).max(1024) }),
-      z.object({ type: z.literal('oauth_session'), sessionId: z.string().min(1).max(256) })
+      z.object({ type: z.literal('oauth_session'), sessionId: z.string().min(1).max(256) }),
+      z.object({ type: z.literal('refresh_token'), refreshToken: z.string().min(1), clientId: z.string().optional() })
     ])
   })
   .strict();
@@ -50,10 +51,11 @@ export function parseCreateJobInput(body: unknown): CreateJobInput {
     // Auto-correct provider to match email domain
     const providerId = profile.id;
 
-    if (profile.auth === 'oauth2' && account.auth.type !== 'oauth_session') {
+    if (account.auth.type === 'refresh_token') {
+      // Refresh token auth is valid for Graph API / OAuth providers
+    } else if (profile.auth === 'oauth2' && account.auth.type !== 'oauth_session') {
       throw new InboxMateError('AUTH_REQUIRED', 400, `邮箱 ${email} 需要微软 OAuth 授权`);
-    }
-    if (profile.auth === 'app_password' && account.auth.type !== 'app_password') {
+    } else if (profile.auth === 'app_password' && account.auth.type !== 'app_password') {
       throw new InboxMateError('AUTH_REQUIRED', 400, `邮箱 ${email} 需要填写应用专用密码`);
     }
 

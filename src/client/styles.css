@@ -360,7 +360,8 @@ html, body {
   padding: 10px;
   background: var(--bg-surface);
   border-right: 1px solid var(--border-subtle);
-  overflow-y: auto;
+  height: 100%;
+  overflow-y: hidden;
 }
 
 .surface-card {
@@ -379,6 +380,20 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex-shrink: 0;
+}
+
+.account-queue-card {
+  flex: 1;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.run-settings-card {
+  flex-shrink: 0;
+  margin-top: auto;
 }
 
 .add-tab-header {
@@ -485,7 +500,7 @@ html, body {
 }
 
 .batch-textarea-tall {
-  height: 140px !important; /* Expanded height in Tab view */
+  height: 220px !important; /* Expanded height in Tab view to fit full unified format text */
 }
 
 .batch-textarea:focus {
@@ -615,6 +630,8 @@ input:focus, select:focus {
   border-radius: var(--radius-sm);
   border: none;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.15s;
 }
 
@@ -657,9 +674,9 @@ input:focus, select:focus {
   color: #fff;
 }
 
-.btn-xs { height: 22px; padding: 0 6px; font-size: 10px; }
-.btn-sm { height: 26px; padding: 0 8px; font-size: 11px; }
-.btn-lg { height: 34px; font-size: 12px; }
+.btn-xs { height: 24px; padding: 0 8px; font-size: 10px; font-weight: 600; white-space: nowrap; flex-shrink: 0; line-height: 1; }
+.btn-sm { height: 26px; padding: 0 8px; font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+.btn-lg { height: 34px; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
 
 .icon-btn {
   display: inline-flex;
@@ -679,11 +696,11 @@ input:focus, select:focus {
   color: var(--text-primary);
 }
 
-/* Account Queue List Container (Requirement 2: Expanded Max Height) */
+/* Account Queue List Container (Expanded Height & Flexible Stretch) */
 .queue-scroll-container {
   flex: 1;
-  max-height: 260px;
-  min-height: 80px;
+  min-height: 0;
+  max-height: none;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -705,12 +722,15 @@ input:focus, select:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
 }
 
 .queue-account-info {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -730,6 +750,8 @@ input:focus, select:focus {
 .email-meta {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -739,6 +761,7 @@ input:focus, select:focus {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .messages-count {
@@ -750,6 +773,8 @@ input:focus, select:focus {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .missing-secret-tag {
@@ -760,16 +785,34 @@ input:focus, select:focus {
   border: 1px solid rgba(245, 158, 11, 0.3);
   padding: 1px 4px;
   border-radius: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.graph-token-tag {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--accent-cyan);
+  background: rgba(14, 165, 233, 0.15);
+  border: 1px solid rgba(14, 165, 233, 0.3);
+  padding: 1px 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .status-badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 3px;
   font-size: 9px;
   font-weight: 700;
-  padding: 1px 6px;
+  padding: 2px 6px;
   border-radius: 10px;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+  line-height: 1;
 }
 
 .tone-neutral { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
@@ -782,24 +825,78 @@ input:focus, select:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 3px 6px;
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.2);
+  gap: 6px;
+  padding: 5px 8px;
+  margin-top: 6px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
   border-radius: var(--radius-sm);
-  font-size: 9px;
+  font-size: 10px;
+  line-height: 1.3;
 }
 
 .error-tag-wrap {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   color: var(--accent-danger);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.error-tag-wrap svg {
+  flex-shrink: 0;
+}
+
+.error-tag-label {
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.error-tag-tip {
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
 }
 
 .edit-secret-box {
   display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 4px 6px;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.edit-secret-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.edit-secret-input:focus {
+  border-color: var(--accent-cyan);
+}
+
+.edit-secret-actions {
+  display: flex;
+  align-items: center;
   gap: 4px;
-  margin-top: 2px;
+  flex-shrink: 0;
 }
 
 /* Main Feed Column (Right Workspace Panel) */
@@ -1427,14 +1524,19 @@ input:focus, select:focus {
 .parsed-email { color: var(--text-primary); font-weight: 600; flex: 1; }
 
 .format-guide-box {
-  margin-top: 10px;
-  padding: 10px 12px;
+  margin-top: 8px;
+  padding: 8px 10px;
   background: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
   border-left: 3px solid var(--accent-cyan);
   border-radius: var(--radius-md);
   font-size: 11px;
   color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 .format-guide-title {
@@ -1442,27 +1544,66 @@ input:focus, select:focus {
   align-items: center;
   gap: 5px;
   font-weight: 700;
+  font-size: 11px;
   color: var(--text-primary);
-  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
-.format-guide-sub {
-  margin: 0 0 6px;
+.format-item-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.format-group-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
   font-size: 10px;
+}
+
+.fmt-provider-tag {
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+}
+
+.tag-microsoft { background: rgba(14, 165, 233, 0.15); color: #0ea5e9; }
+.tag-mailru { background: rgba(0, 95, 249, 0.15); color: #005ff9; }
+.tag-gmx { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+.tag-rambler { background: rgba(139, 92, 246, 0.15); color: #8b5cf6; }
+
+.fmt-domain-list {
+  font-size: 9px;
   color: var(--text-muted);
 }
 
 .format-item {
-  margin-top: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 1px;
   font-size: 10px;
+  padding-left: 4px;
+}
+
+.fmt-desc {
+  font-size: 9px;
+  color: var(--text-muted);
 }
 
 .format-item code {
   font-family: var(--font-mono);
   background: var(--bg-surface);
-  padding: 1px 5px;
+  padding: 2px 6px;
   border-radius: 4px;
   color: var(--accent-cyan);
+  font-size: 10px;
+  word-break: break-all;
+  border: 1px solid var(--border-subtle);
 }
 
 .fmt-label {
@@ -2190,5 +2331,24 @@ input:focus, select:focus {
 
   .copyright-text {
     display: none;
+  }
+
+  /* Mobile Sidebar Overrides */
+  .sidebar-column {
+    height: auto;
+    overflow-y: auto;
+  }
+
+  .account-queue-card {
+    height: auto;
+    flex: none;
+  }
+
+  .queue-scroll-container {
+    max-height: 320px;
+  }
+
+  .run-settings-card {
+    margin-top: 0;
   }
 }

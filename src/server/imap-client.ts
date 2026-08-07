@@ -87,7 +87,8 @@ function fromAddress(message: FetchMessageObject): string {
 
 function credentialsFor(account: AccountInput, resolveMicrosoftAccessToken: FetchAccountOptions['resolveMicrosoftAccessToken']): { user: string; pass?: string; accessToken?: string } {
   if (account.auth.type === 'app_password') return { user: account.email, pass: account.auth.secret };
-  return { user: account.email, accessToken: resolveMicrosoftAccessToken(account.auth.sessionId, account.email) };
+  if (account.auth.type === 'oauth_session') return { user: account.email, accessToken: resolveMicrosoftAccessToken(account.auth.sessionId, account.email) };
+  throw new InboxMateError('AUTH_REQUIRED');
 }
 
 export interface FetchAccountResult {
@@ -96,6 +97,10 @@ export interface FetchAccountResult {
 }
 
 export async function fetchAccountVerificationCode(account: AccountInput, options: FetchAccountOptions): Promise<FetchAccountResult> {
+  if (account.auth.type === 'refresh_token') {
+    return fetchAccountVerificationCodeViaGraph(account, options);
+  }
+
   const provider = PROVIDER_REGISTRY[account.provider];
   let client: ImapFlow | undefined;
   let lock: Awaited<ReturnType<ImapFlow['getMailboxLock']>> | undefined;
@@ -216,5 +221,132 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
       }
     }
   }
+}
+
+export async function fetchAccountVerificationCodeViaGraph(
+  account: AccountInput,
+  options: FetchAccountOptions
+): Promise<FetchAccountResult> {
+  options.onProgress('authenticating');
+  if (account.auth.type !== 'refresh_token') {
+    throw new InboxMateError('AUTH_REQUIRED', 400, '需要 Refresh Token 才能调用 Graph API');
+  }
+
+  const refreshToken = account.auth.refreshToken;
+  const clientId = account.auth.clientId || '9e5f94bc-e8a4-4e73-b8be-63364c29d753';
+
+  // Exchange Refresh Token for Access Token
+  const endpoints = [
+    'https://login.live.com/oauth20_token.srf',
+    'https://login.microsoftonline.com/common/oauth2/v2.0/token',
+    'https://login.microsoftonline.com/consumers/oauth2/v2.0/token'
+  ];
+
+  let accessToken: string | null = null;
+  let lastErrorMsg = '';
+
+  for (const endpoint of endpoints) {
+    if (options.signal.aborted) throw new InboxMateError('CANCELLED');
+    try {
+      const params = new URLSearchParams({
+        client_id: clientId,
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        scope: 'https://graph.microsoft.com/Mail.Read offline_access'
+      });
+
+      const tokenRes = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString()
+      });
+
+      const tokenData = (await tokenRes.json()) as any;
+      if (tokenData && tokenData.access_token) {
+        accessToken = tokenData.access_token as string;
+        break;
+      } else if (tokenData) {
+        lastErrorMsg = tokenData.error_description || tokenData.error || 'Token exchange failed';
+      }
+    } catch (err: any) {
+      lastErrorMsg = err.message || 'Network error during token exchange';
+    }
+  }
+
+  if (!accessToken) {
+    throw new InboxMateError('AUTH_FAILED', 400, `微软 Refresh Token 刷新失败: ${lastErrorMsg}`);
+  }
+
+  options.onProgress('searching');
+
+  // Call Microsoft Graph API to list messages
+  const top = options.maxMessages || 15;
+  const graphUrl = `https://graph.microsoft.com/v1.0/me/messages?$top=${top}&$select=id,subject,from,receivedDateTime,bodyPreview,body`;
+
+  if (options.signal.aborted) throw new InboxMateError('CANCELLED');
+  options.onProgress('parsing');
+
+  const graphRes = await fetch(graphUrl, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+
+  const graphData = (await graphRes.json()) as any;
+  if (!graphData || !graphData.value || !Array.isArray(graphData.value)) {
+    throw new InboxMateError('CONNECTION_FAILED', 500, `Graph API 请求失败: ${graphData?.error?.message || '未知错误'}`);
+  }
+
+  const emailItems: EmailItem[] = [];
+  const matches: CodeMatch[] = [];
+
+  for (const msg of graphData.value) {
+    if (options.signal.aborted) throw new InboxMateError('CANCELLED');
+    const receivedAt = msg.receivedDateTime ? new Date(msg.receivedDateTime).toISOString() : new Date().toISOString();
+    const subject = msg.subject || '(无主题)';
+    const from = msg.from?.emailAddress?.name
+      ? `${msg.from.emailAddress.name} <${msg.from.emailAddress.address}>`
+      : msg.from?.emailAddress?.address || '';
+    const snippet = msg.bodyPreview || '';
+
+    let textBody = snippet;
+    let htmlBody: string | undefined = undefined;
+
+    if (msg.body) {
+      if (msg.body.contentType === 'html') {
+        htmlBody = msg.body.content;
+        textBody = snippet || (msg.body.content ? msg.body.content.replace(/<[^>]+>/g, ' ') : '');
+      } else {
+        textBody = msg.body.content || snippet;
+      }
+    }
+
+    const codeMatch = extractVerificationCode({
+      subject,
+      text: textBody || snippet,
+      receivedAt,
+      from
+    });
+    if (codeMatch) matches.push(codeMatch);
+
+    emailItems.push({
+      id: msg.id || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      accountEmail: account.email,
+      provider: account.provider,
+      subject,
+      from,
+      receivedAt,
+      snippet,
+      textBody,
+      htmlBody,
+      codeMatch: codeMatch ?? undefined
+    });
+  }
+
+  matches.sort((left, right) => right.score - left.score);
+  const primaryCode = matches[0];
+
+  return {
+    messages: emailItems,
+    primaryCode
+  };
 }
 

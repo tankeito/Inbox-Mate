@@ -38,7 +38,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
-type Provider = 'gmx' | 'rambler' | 'microsoft';
+type Provider = 'gmx' | 'rambler' | 'microsoft' | 'mailru';
 type CredentialType = 'appPassword' | 'oauth2';
 type HealthState = 'checking' | 'ready' | 'offline';
 type OauthState = 'not_started' | 'authorizing' | 'authorized' | 'denied' | 'expired' | 'consumed';
@@ -85,6 +85,8 @@ interface Account {
   secret: string;
   oauthSessionId?: string;
   oauthState?: OauthState;
+  refreshToken?: string;
+  clientId?: string;
   status: AccountStatus;
   errorCode?: string;
   errorMessage?: string;
@@ -96,6 +98,8 @@ interface AccountDraft {
   email: string;
   provider: Provider;
   secret: string;
+  refreshToken?: string;
+  clientId?: string;
 }
 
 interface ToastState {
@@ -126,6 +130,7 @@ const providerDetails: Record<Provider, { label: string; domain: string; authLab
   microsoft: { label: 'Microsoft', domain: 'Outlook / Hotmail', authLabel: 'OAuth 2.0 授权', badgeColor: '#0ea5e9' },
   gmx: { label: 'GMX 邮箱', domain: 'GMX', authLabel: '密码', badgeColor: '#3b82f6' },
   rambler: { label: 'Rambler', domain: 'Rambler 邮箱', authLabel: '密码', badgeColor: '#8b5cf6' },
+  mailru: { label: 'Mail.ru', domain: 'Mail.ru 邮箱', authLabel: '密码', badgeColor: '#005ff9' },
 };
 
 const providerDomains: Record<Provider, readonly string[]> = {
@@ -134,6 +139,7 @@ const providerDomains: Record<Provider, readonly string[]> = {
     'hotmail.com',
     'live.com',
     'msn.com',
+    'offilive.com',
     'outlook.de',
     'outlook.jp',
     'outlook.co.uk',
@@ -142,6 +148,7 @@ const providerDomains: Record<Provider, readonly string[]> = {
   ],
   gmx: ['gmx.com', 'gmx.net', 'gmx.de', 'gmx.at', 'gmx.ch', 'gmx.fr', 'gmx.co.uk', 'gmx.us', 'gmx.info'],
   rambler: ['rambler.ru', 'myrambler.ru', 'ro.ru', 'lenta.ru', 'autorambler.ru'],
+  mailru: ['mail.ru', 'inbox.ru', 'list.ru', 'bk.ru', 'internet.ru'],
 };
 
 const statusDetails: Record<
@@ -180,36 +187,68 @@ const providerForEmail = (email: string): Provider | undefined => {
 const credentialForProvider = (provider: Provider): CredentialType =>
   provider === 'microsoft' ? 'oauth2' : 'appPassword';
 
-function parseAccountLine(line: string): { email: string; secret?: string } | null {
+function parseAccountLine(
+  line: string,
+): { email: string; secret?: string; refreshToken?: string; clientId?: string } | null {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith('#')) return null;
 
-  const separators = ['\t', '----'];
+  const separators = ['----', '\t', '|'];
   for (const separator of separators) {
-    const index = trimmed.indexOf(separator);
-    if (index > 0) {
-      const email = trimmed.slice(0, index).trim();
-      const secret = trimmed.slice(index + separator.length).trim();
-      return email ? { email, secret: secret || undefined } : null;
+    if (trimmed.includes(separator)) {
+      const parts = trimmed.split(separator).map((s) => s.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        const email = parts[0];
+        if (!isEmail(email)) return null;
+
+        let secret = '';
+        let refreshToken: string | undefined = undefined;
+        let clientId: string | undefined = undefined;
+
+        for (let i = 1; i < parts.length; i++) {
+          const part = parts[i];
+          if (part.startsWith('M.C') || part.length > 100) {
+            refreshToken = part;
+          } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(part)) {
+            clientId = part;
+          } else if (i === 1) {
+            secret = part;
+          }
+        }
+
+        return { email, secret: secret || undefined, refreshToken, clientId };
+      }
     }
   }
 
   const colonMatch = trimmed.match(/^([^\s:]+@[^\s:]+)\s*:\s*(.+)$/);
-  if (colonMatch) return { email: colonMatch[1].trim(), secret: colonMatch[2].trim() };
+  if (colonMatch) {
+    const email = colonMatch[1].trim();
+    const rest = colonMatch[2].trim();
+    const parts = rest.split(':').map((s) => s.trim()).filter(Boolean);
 
-  for (const separator of ['|', ',']) {
-    const index = trimmed.indexOf(separator);
-    if (index > 0) {
-      const email = trimmed.slice(0, index).trim();
-      const secret = trimmed.slice(index + separator.length).trim();
-      return email ? { email, secret: secret || undefined } : null;
+    let secret = parts[0] || '';
+    let refreshToken: string | undefined = undefined;
+    let clientId: string | undefined = undefined;
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (part.startsWith('M.C') || part.length > 100) {
+        refreshToken = part;
+      } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(part)) {
+        clientId = part;
+      }
     }
+
+    return { email, secret: secret || undefined, refreshToken, clientId };
   }
 
   return isEmail(trimmed) ? { email: trimmed } : null;
 }
 
-function parseSingleAccountInput(raw: string): { email: string; provider: Provider; secret: string } | null {
+function parseSingleAccountInput(
+  raw: string,
+): { email: string; provider: Provider; secret: string; refreshToken?: string; clientId?: string } | null {
   const line = raw.trim();
   if (!line) return null;
   const parsed = parseAccountLine(line);
@@ -221,7 +260,13 @@ function parseSingleAccountInput(raw: string): { email: string; provider: Provid
     return null;
   }
   const provider = providerForEmail(parsed.email) ?? 'gmx';
-  return { email: parsed.email, provider, secret: parsed.secret ?? '' };
+  return {
+    email: parsed.email,
+    provider,
+    secret: parsed.secret ?? '',
+    refreshToken: parsed.refreshToken,
+    clientId: parsed.clientId,
+  };
 }
 
 function stringValue(value: unknown): string | undefined {
@@ -467,7 +512,7 @@ export function App() {
     return result;
   }, [filteredEmails, currentFeedPage, feedPageSize]);
 
-  const QUEUE_PAGE_SIZE = 10;
+  const QUEUE_PAGE_SIZE = 20;
   const totalQueuePages = Math.max(1, Math.ceil(accounts.length / QUEUE_PAGE_SIZE));
   const currentQueuePage = Math.min(queuePage, totalQueuePages);
 
@@ -566,20 +611,25 @@ export function App() {
         provider,
         credentialType: credentialForProvider(provider),
         secret: entry.secret ?? '',
-        oauthState: provider === 'microsoft' ? 'not_started' : undefined,
+        refreshToken: entry.refreshToken,
+        clientId: entry.clientId,
+        oauthState: provider === 'microsoft' ? (entry.refreshToken ? 'authorized' : 'not_started') : undefined,
         status: 'draft',
       });
     }
 
-    setPasteText('');
-    if (!parsed.length) {
-      notify('error', '未查找到可导入的新邮箱，请检查格式');
+    if (parsed.length === 0) {
+      notify('error', '未解析出有效的全新邮箱格式');
       return;
     }
+
     setAccounts((current) => [...current, ...parsed]);
-    const skipped = rejected ? `，跳过 ${rejected} 条` : '';
-    const oauthNote = microsoftCount ? '（含 Microsoft 授权邮箱）' : '';
-    notify('success', `成功导入 ${parsed.length} 个邮箱账户${skipped}${oauthNote}`);
+    setPasteText('');
+    if (microsoftCount > 0) {
+      notify('info', `成功导入 ${parsed.length} 个账号，其中包含 ${microsoftCount} 个 Microsoft 账户`);
+    } else {
+      notify('success', `成功添加 ${parsed.length} 个新账号至队列`);
+    }
   };
 
   const addAccount = (event: FormEvent<HTMLFormElement>) => {
@@ -832,14 +882,14 @@ export function App() {
     }
 
     // Precise Password Validation
-    const missingSecretAccount = accounts.find((acc) => acc.provider !== 'microsoft' && !acc.secret.trim());
+    const missingSecretAccount = accounts.find((acc) => acc.provider !== 'microsoft' && !acc.refreshToken && !acc.secret.trim());
     if (missingSecretAccount) {
       setEditingSecretId(missingSecretAccount.id);
       notify('error', `账户 ${missingSecretAccount.email} 尚未填写应用密码，请在队列卡片中填写`);
       return;
     }
 
-    const missingOAuthAccount = accounts.find((acc) => acc.provider === 'microsoft' && !acc.oauthSessionId);
+    const missingOAuthAccount = accounts.find((acc) => acc.provider === 'microsoft' && !acc.oauthSessionId && !acc.refreshToken);
     if (missingOAuthAccount) {
       notify('error', `账户 ${missingOAuthAccount.email} 尚未完成 Microsoft 授权，请点击【连接】`);
       return;
@@ -872,9 +922,11 @@ export function App() {
             email: account.email.trim(),
             provider: account.provider,
             auth:
-              account.provider === 'microsoft'
-                ? { type: 'oauth_session', sessionId: account.oauthSessionId }
-                : { type: 'app_password', secret: account.secret.trim() },
+              account.refreshToken
+                ? { type: 'refresh_token', refreshToken: account.refreshToken, clientId: account.clientId }
+                : account.provider === 'microsoft'
+                  ? { type: 'oauth_session', sessionId: account.oauthSessionId }
+                  : { type: 'app_password', secret: account.secret.trim() },
           })),
           lookbackMinutes,
           maxMessagesPerAccount,
@@ -1120,18 +1172,56 @@ export function App() {
                   <span>加入账号队列</span>
                 </button>
 
-                {/* Format Guide Box (GMX & Rambler Focus) */}
+                {/* Format Guide Box with All Supported Providers & Formats */}
                 <div className="format-guide-box">
                   <div className="format-guide-title">
                     <FileText size={13} />
-                    <span>格式说明：</span>
+                    <span>支持邮箱及导入格式说明：</span>
                   </div>
-                  <p className="format-guide-sub">请按照 <code>邮箱地址----应用密码</code> 格式输入：</p>
-                  <div className="format-item">
-                    <span className="fmt-label">GMX 邮箱:</span> <code>name@gmx.com----密码</code>
+                  
+                  <div className="format-item-group">
+                    <div className="format-group-title">
+                      <span className="fmt-provider-tag tag-microsoft">1. Microsoft 阵列</span>
+                      <span className="fmt-domain-list">(Outlook / Hotmail / Offilive / Live / MSN)</span>
+                    </div>
+                    <div className="format-item">
+                      <span className="fmt-desc">4段式 Graph 刷新令牌 (免登录推荐):</span>
+                      <code>邮箱----密码----客户端ID----刷新令牌</code>
+                    </div>
+                    <div className="format-item">
+                      <span className="fmt-desc">在线一键授权:</span>
+                      <code>name@outlook.com</code>
+                    </div>
                   </div>
-                  <div className="format-item">
-                    <span className="fmt-label">Rambler 邮箱:</span> <code>name@rambler.ru----密码</code>
+
+                  <div className="format-item-group">
+                    <div className="format-group-title">
+                      <span className="fmt-provider-tag tag-mailru">2. Mail.ru 邮箱</span>
+                      <span className="fmt-domain-list">(Mail.ru / Inbox.ru / List.ru / Bk.ru)</span>
+                    </div>
+                    <div className="format-item">
+                      <code>name@mail.ru----外置应用专用密码</code>
+                    </div>
+                  </div>
+
+                  <div className="format-item-group">
+                    <div className="format-group-title">
+                      <span className="fmt-provider-tag tag-gmx">3. GMX 邮箱</span>
+                      <span className="fmt-domain-list">(GMX.com / GMX.net / GMX.de)</span>
+                    </div>
+                    <div className="format-item">
+                      <code>name@gmx.com----密码</code>
+                    </div>
+                  </div>
+
+                  <div className="format-item-group">
+                    <div className="format-group-title">
+                      <span className="fmt-provider-tag tag-rambler">4. Rambler 邮箱</span>
+                      <span className="fmt-domain-list">(Rambler.ru / Lenta.ru / Ro.ru)</span>
+                    </div>
+                    <div className="format-item">
+                      <code>name@rambler.ru----密码</code>
+                    </div>
                   </div>
                 </div>
               </form>
@@ -1142,7 +1232,23 @@ export function App() {
                   className="batch-textarea batch-textarea-tall"
                   value={pasteText}
                   onChange={(event) => setPasteText(event.target.value)}
-                  placeholder={`邮箱@gmx.com----密码\n邮箱@outlook.com\n邮箱@rambler.ru:密码`}
+                  placeholder={`# 【批量导入统一格式说明 - 每行一个账号】
+
+# 1. 微软 / Outlook / Hotmail / Offilive (4段式 Graph 刷新令牌免登录抓取推荐)
+邮箱----密码----客户端ID----刷新令牌
+
+# 2. 微软 / Outlook / Hotmail / Offilive (在线 OAuth 一键授权)
+name@outlook.com
+name@hotmail.com
+
+# 3. Mail.ru 邮箱 (使用外置应用专用密码)
+name@mail.ru----外置应用专用密码
+
+# 4. GMX 邮箱 (使用账号密码)
+name@gmx.com----密码
+
+# 5. Rambler 邮箱 (使用账号密码)
+name@rambler.ru----密码`}
                   spellCheck={false}
                   autoComplete="off"
                   disabled={isRunning}
@@ -1179,8 +1285,8 @@ export function App() {
             )}
           </div>
 
-          {/* Account Queue Management List (Expanded Height) */}
-          <div className="surface-card flex-1 flex-col overflow-hidden">
+          {/* Account Queue Management List (Expanded Height & Pinned Layout) */}
+          <div className="surface-card account-queue-card">
             <div className="card-header border-b">
               <div className="card-title">
                 <UserCheck size={15} className="text-cyan" />
@@ -1603,7 +1709,8 @@ function AccountQueueCard({
   const isError = account.status === 'failed';
   const errorInfo = isError ? getErrorTag(account.errorCode) : null;
   const isMicrosoft = account.provider === 'microsoft';
-  const isSecretMissing = !isMicrosoft && !account.secret.trim();
+  const hasRefreshToken = Boolean(account.refreshToken);
+  const isSecretMissing = !isMicrosoft && !hasRefreshToken && !account.secret.trim();
 
   return (
     <div className={`queue-card status-tone-${detail.tone}`}>
@@ -1617,13 +1724,23 @@ function AccountQueueCard({
               {account.email}
             </span>
             <span className="messages-count">
-              {account.messages ? `${account.messages.length} 封邮件` : providerDetails[account.provider].domain}
+              {account.messages
+                ? `${account.messages.length} 封邮件`
+                : hasRefreshToken
+                  ? 'Graph API 刷新令牌'
+                  : providerDetails[account.provider].domain}
             </span>
           </div>
         </div>
 
         <div className="queue-card-actions">
-          {isSecretMissing && <span className="missing-secret-tag">[未设置密码]</span>}
+          {hasRefreshToken ? (
+            <span className="graph-token-tag" title="微软 Refresh Token (Graph API)">
+              [Graph 令牌]
+            </span>
+          ) : isSecretMissing ? (
+            <span className="missing-secret-tag">[未设置密码]</span>
+          ) : null}
           <StatusChip status={account.status} />
           {!disabled && (
             <button className="icon-btn remove-btn" type="button" onClick={onRemove} title="从队列删除">
@@ -1659,23 +1776,24 @@ function AccountQueueCard({
         <div className="edit-secret-box">
           <input
             type="password"
+            className="edit-secret-input"
             value={isEditingSecret ? editSecretValue : account.secret}
             onChange={(e) => {
               if (isEditingSecret) onEditSecretChange(e.target.value);
               else onSaveEditSecret(e.target.value);
             }}
-            placeholder="输入密码"
+            placeholder="输入应用专用密码"
             autoFocus={isEditingSecret}
           />
           {isEditingSecret && (
-            <>
+            <div className="edit-secret-actions">
               <button className="btn btn-xs btn-emerald" type="button" onClick={() => onSaveEditSecret()}>
                 保存
               </button>
               <button className="btn btn-xs btn-secondary" type="button" onClick={onCancelEditSecret}>
                 取消
               </button>
-            </>
+            </div>
           )}
         </div>
       )}
@@ -1866,7 +1984,7 @@ function EmailReaderModal({
   const [copied, setCopied] = useState(false);
   const hasCode = Boolean(email.codeMatch?.code);
   const isHighConfidence = email.codeMatch?.confidence === 'high' || email.codeMatch?.confidence === 'medium';
-  const providerLabel = email.provider === 'microsoft' ? 'Microsoft' : email.provider === 'gmx' ? 'GMX' : 'Rambler';
+  const providerLabel = providerDetails[email.provider]?.label ?? email.provider;
 
   const handleCopy = () => {
     if (email.codeMatch?.code) {
