@@ -323,6 +323,7 @@ export function App() {
 
   // Filters and views for email feed
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [accountFilter, setAccountFilter] = useState<string>('all');
   const [onlyCodeFilter, setOnlyCodeFilter] = useState<boolean>(false);
   const [feedViewMode, setFeedViewMode] = useState<'grid' | 'list'>('grid');
@@ -331,12 +332,24 @@ export function App() {
   const [editingSecretId, setEditingSecretId] = useState<string | null>(null);
   const [editSecretValue, setEditSecretValue] = useState('');
 
+  // Feed Pagination State
+  const [feedPage, setFeedPage] = useState(1);
+  const [feedPageSize, setFeedPageSize] = useState(12);
+
   const csrfTokenRef = useRef<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const oauthPollersRef = useRef(new Map<string, { interval: number; timeout: number }>());
 
   const isRunning = Boolean(jobId);
+
+  // Search input Debounce (250ms) to prevent heavy recalculations during fast typing
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // Dynamic Theme evaluation
   useEffect(() => {
@@ -347,6 +360,11 @@ export function App() {
     }
     document.documentElement.setAttribute('data-theme', resolvedTheme);
   }, [themeMode]);
+
+  // Reset feed page to 1 when filters or search change
+  useEffect(() => {
+    setFeedPage(1);
+  }, [debouncedSearchQuery, accountFilter, onlyCodeFilter, feedPageSize]);
 
   // Stats calculation
   const stats = useMemo(() => {
@@ -387,8 +405,8 @@ export function App() {
     return stats.allMails.filter((mail) => {
       if (onlyCodeFilter && !mail.codeMatch?.code) return false;
       if (accountFilter !== 'all' && mail.accountEmail.toLowerCase() !== accountFilter.toLowerCase()) return false;
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
+      if (debouncedSearchQuery.trim()) {
+        const q = debouncedSearchQuery.toLowerCase();
         const inSubject = mail.subject.toLowerCase().includes(q);
         const inFrom = mail.from.toLowerCase().includes(q);
         const inSnippet = mail.snippet.toLowerCase().includes(q);
@@ -398,7 +416,7 @@ export function App() {
       }
       return true;
     });
-  }, [stats.allMails, onlyCodeFilter, accountFilter, searchQuery]);
+  }, [stats.allMails, onlyCodeFilter, accountFilter, debouncedSearchQuery]);
 
   const groupedEmails = useMemo(() => {
     const map = new Map<string, EmailItem[]>();
@@ -414,6 +432,40 @@ export function App() {
     }
     return result;
   }, [filteredEmails]);
+
+  // Feed Pagination Engine
+  const totalFeedPages = useMemo(() => {
+    if (feedPageSize === 0) return 1;
+    return Math.max(1, Math.ceil(filteredEmails.length / feedPageSize));
+  }, [filteredEmails.length, feedPageSize]);
+
+  const currentFeedPage = Math.min(feedPage, totalFeedPages);
+
+  const paginatedEmails = useMemo(() => {
+    if (feedPageSize === 0) return filteredEmails;
+    const start = (currentFeedPage - 1) * feedPageSize;
+    return filteredEmails.slice(start, start + feedPageSize);
+  }, [filteredEmails, currentFeedPage, feedPageSize]);
+
+  const paginatedGroupedEmails = useMemo(() => {
+    const pageMails =
+      feedPageSize === 0
+        ? filteredEmails
+        : filteredEmails.slice((currentFeedPage - 1) * feedPageSize, currentFeedPage * feedPageSize);
+
+    const map = new Map<string, EmailItem[]>();
+    for (const mail of pageMails) {
+      const list = map.get(mail.accountEmail) || [];
+      list.push(mail);
+      map.set(mail.accountEmail, list);
+    }
+    const result: Array<{ accountEmail: string; provider: Provider; emails: EmailItem[] }> = [];
+    for (const [email, emails] of map.entries()) {
+      const provider = emails[0]?.provider ?? 'gmx';
+      result.push({ accountEmail: email, provider, emails });
+    }
+    return result;
+  }, [filteredEmails, currentFeedPage, feedPageSize]);
 
   const QUEUE_PAGE_SIZE = 10;
   const totalQueuePages = Math.max(1, Math.ceil(accounts.length / QUEUE_PAGE_SIZE));
@@ -1359,7 +1411,7 @@ export function App() {
           <div className={`feed-scroll-container view-${feedViewMode} display-${feedGroupMode}`}>
             {filteredEmails.length > 0 ? (
               feedGroupMode === 'grouped' ? (
-                groupedEmails.map((group) => (
+                paginatedGroupedEmails.map((group) => (
                   <AccountGroupCard
                     key={group.accountEmail}
                     accountEmail={group.accountEmail}
@@ -1371,7 +1423,7 @@ export function App() {
                   />
                 ))
               ) : (
-                filteredEmails.map((mail) => (
+                paginatedEmails.map((mail) => (
                   <EmailCard
                     key={mail.id}
                     email={mail}
@@ -1392,8 +1444,32 @@ export function App() {
               </div>
             )}
           </div>
+
+          {/* Bottom Pagination Control Bar */}
+          <FeedPaginationBar
+            currentPage={currentFeedPage}
+            totalPages={totalFeedPages}
+            pageSize={feedPageSize}
+            totalItems={filteredEmails.length}
+            onPageChange={setFeedPage}
+            onPageSizeChange={setFeedPageSize}
+          />
         </section>
       </main>
+
+      {/* Global Responsive App Footer (PC & Mobile) */}
+      <AppFooter
+        stats={stats}
+        health={health}
+        onClearCache={() => {
+          if (isRunning) {
+            notify('error', '当前正在并发抓取邮件，请先停止任务');
+            return;
+          }
+          setAccounts([]);
+          notify('info', '已成功清空本地内存中的所有托管账户与历史数据');
+        }}
+      />
 
       {/* Email Reader Modal */}
       {selectedMailModal && (
@@ -1903,5 +1979,182 @@ function EmailReaderModal({
         </div>
       </div>
     </div>
+  );
+}
+
+function FeedPaginationBar({
+  currentPage,
+  totalPages,
+  pageSize,
+  totalItems,
+  onPageChange,
+  onPageSizeChange,
+}: {
+  currentPage: number;
+  totalPages: number;
+  pageSize: number;
+  totalItems: number;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (size: number) => void;
+}) {
+  if (totalItems === 0) return null;
+
+  const startItem = pageSize === 0 ? 1 : (currentPage - 1) * pageSize + 1;
+  const endItem = pageSize === 0 ? totalItems : Math.min(currentPage * pageSize, totalItems);
+
+  // Smart page numbers windowing
+  const pageNumbers: number[] = [];
+  const maxVisible = 5;
+  let startPage = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+  let endPage = startPage + maxVisible - 1;
+  if (endPage > totalPages) {
+    endPage = totalPages;
+    startPage = Math.max(1, endPage - maxVisible + 1);
+  }
+  for (let i = startPage; i <= endPage; i++) {
+    pageNumbers.push(i);
+  }
+
+  return (
+    <div className="feed-pagination-bar">
+      <div className="pagination-info">
+        <span>
+          显示 <strong>{startItem}</strong> - <strong>{endItem}</strong> 封
+        </span>
+        <span className="pagination-total">（共 {totalItems} 封邮件）</span>
+      </div>
+
+      <div className="pagination-controls">
+        <button
+          type="button"
+          className="page-nav-btn"
+          disabled={currentPage <= 1 || pageSize === 0}
+          onClick={() => onPageChange(currentPage - 1)}
+          title="上一页"
+        >
+          <ChevronLeft size={14} />
+          <span className="nav-btn-text">上一页</span>
+        </button>
+
+        {pageSize > 0 && totalPages > 1 && (
+          <div className="page-numbers-list">
+            {startPage > 1 && (
+              <>
+                <button type="button" className="page-num-btn" onClick={() => onPageChange(1)}>
+                  1
+                </button>
+                {startPage > 2 && <span className="page-ellipsis">...</span>}
+              </>
+            )}
+
+            {pageNumbers.map((num) => (
+              <button
+                key={num}
+                type="button"
+                className={`page-num-btn ${num === currentPage ? 'active' : ''}`}
+                onClick={() => onPageChange(num)}
+              >
+                {num}
+              </button>
+            ))}
+
+            {endPage < totalPages && (
+              <>
+                {endPage < totalPages - 1 && <span className="page-ellipsis">...</span>}
+                <button type="button" className="page-num-btn" onClick={() => onPageChange(totalPages)}>
+                  {totalPages}
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        <button
+          type="button"
+          className="page-nav-btn"
+          disabled={currentPage >= totalPages || pageSize === 0}
+          onClick={() => onPageChange(currentPage + 1)}
+          title="下一页"
+        >
+          <span className="nav-btn-text">下一页</span>
+          <ChevronRight size={14} />
+        </button>
+      </div>
+
+      <div className="pagination-size-wrap">
+        <label htmlFor="feed-page-size-select">每页展示:</label>
+        <select
+          id="feed-page-size-select"
+          value={pageSize}
+          onChange={(e) => onPageSizeChange(Number(e.target.value))}
+          className="page-size-select"
+        >
+          <option value="12">12 封</option>
+          <option value="24">24 封</option>
+          <option value="48">48 封</option>
+          <option value="96">96 封</option>
+          <option value="0">全部 (无限流模式)</option>
+        </select>
+      </div>
+    </div>
+  );
+}
+
+function AppFooter({
+  stats,
+  health,
+  onClearCache,
+}: {
+  stats: { totalAccounts: number; activeAccounts: number; totalMails: number; codeMails: number };
+  health: HealthState;
+  onClearCache: () => void;
+}) {
+  return (
+    <footer className="app-footer">
+      <div className="footer-container">
+        {/* Left Branding & Security Badge */}
+        <div className="footer-left">
+          <div className="footer-brand-badge">
+            <span className="brand-name">Inbox Mate</span>
+            <span className="version-pill">PRO v2.4.0</span>
+          </div>
+          <span className="footer-separator">|</span>
+          <span className="copyright-text">© 2026 Inbox Mate Inc. All rights reserved.</span>
+          <span className="footer-separator">|</span>
+          <div className="security-tag" title="数据仅存在于客户端浏览器与本地 Node 内部通信，不经过任何第三方服务器">
+            <ShieldCheck size={13} className="text-emerald" />
+            <span>本地纯内存沙盒 (IMAP TLS 1.3)</span>
+          </div>
+        </div>
+
+        {/* Center Live Operational Metrics */}
+        <div className="footer-center">
+          <span className="footer-stat-item">
+            托管: <strong>{stats.totalAccounts}</strong> 账号
+          </span>
+          <span className="dot-divider">•</span>
+          <span className="footer-stat-item">
+            已检索: <strong className="text-cyan">{stats.totalMails}</strong> 封邮件
+          </span>
+          <span className="dot-divider">•</span>
+          <span className="footer-stat-item">
+            已识别验证码: <strong className="text-emerald">{stats.codeMails}</strong> 个
+          </span>
+        </div>
+
+        {/* Right Action Links */}
+        <div className="footer-right">
+          <button type="button" className="footer-link-btn" onClick={onClearCache} title="一键重置/清空本地内存中的账号与临时抓取记录">
+            <Trash2 size={12} />
+            <span>清空内存缓存</span>
+          </button>
+          <span className="footer-separator">|</span>
+          <span className="footer-status-pill">
+            <span className={`status-dot ${health === 'ready' ? 'online' : 'offline'}`}></span>
+            <span>{health === 'ready' ? 'Backend 在线' : '服务断开'}</span>
+          </span>
+        </div>
+      </div>
+    </footer>
   );
 }
