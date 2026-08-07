@@ -43,3 +43,7 @@ coverage/
 # Scratch & Debug Scripts
 scratch/
 scratch_*.js
+
+# Documentation & PDF exports
+doc/
+*.pdf

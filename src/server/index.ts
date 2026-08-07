@@ -30,12 +30,19 @@ function parseCookies(header: string | undefined): Record<string, string> {
 
 function isLoopbackRequest(req: Request): boolean {
   const remote = req.socket.remoteAddress ?? '';
-  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remote)) return false;
+  const isLoopbackIp = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remote);
+  if (!isLoopbackIp && process.env.NODE_ENV !== 'production') return false;
   const origin = req.get('origin');
   if (!origin) return true;
   try {
     const url = new URL(origin);
-    return url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '[::1]';
+    const host = req.get('host')?.split(':')[0];
+    return (
+      url.hostname === '127.0.0.1' ||
+      url.hostname === 'localhost' ||
+      url.hostname === '[::1]' ||
+      (!!host && url.hostname === host)
+    );
   } catch {
     return false;
   }
