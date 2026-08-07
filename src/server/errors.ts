@@ -1,0 +1,53 @@
+import type { AccountError, SafeErrorCode } from '../shared/types.js';
+
+const ERROR_MESSAGES: Record<SafeErrorCode, string> = {
+  BAD_REQUEST: '请求参数无效。',
+  UNSUPPORTED_PROVIDER: '该邮箱域名不在本机 MVP 支持列表中。',
+  AUTH_REQUIRED: '需要完成邮箱授权后才能继续。',
+  AUTH_DENIED: '邮箱授权被拒绝或已取消。',
+  AUTH_EXPIRED: '邮箱授权已过期，请重新授权。',
+  AUTH_FAILED: '邮箱认证失败。请检查应用密码或重新授权。',
+  CONNECTION_FAILED: '无法连接到邮箱服务器。',
+  TIMEOUT: '连接邮箱超时，请稍后重试。',
+  RATE_LIMITED: '当前任务过多，请等待正在运行的任务结束。',
+  NO_MATCH: '最近邮件中没有找到可信的验证码。',
+  CANCELLED: '任务已取消。',
+  INTERNAL: '处理邮件时发生了内部错误。'
+};
+
+export class InboxMateError extends Error {
+  constructor(
+    public readonly code: SafeErrorCode,
+    public readonly status = 400
+  ) {
+    super(ERROR_MESSAGES[code]);
+    this.name = 'InboxMateError';
+  }
+}
+
+export function safeError(code: SafeErrorCode): AccountError {
+  return { code, message: ERROR_MESSAGES[code] };
+}
+
+export function isInboxMateError(value: unknown): value is InboxMateError {
+  return value instanceof InboxMateError;
+}
+
+export function classifyImapError(error: unknown, wasAborted: boolean): SafeErrorCode {
+  if (wasAborted) return 'CANCELLED';
+
+  const candidate = error as { name?: string; code?: string; authenticationFailed?: boolean };
+  const name = `${candidate?.name ?? ''}`.toLowerCase();
+  const code = `${candidate?.code ?? ''}`.toLowerCase();
+
+  if (candidate?.authenticationFailed || name.includes('authentication') || code.includes('auth')) {
+    return 'AUTH_FAILED';
+  }
+  if (code.includes('timeout') || code === 'etimedout' || code === 'esockettimeout') {
+    return 'TIMEOUT';
+  }
+  if (code.includes('abort') || name.includes('abort')) {
+    return 'CANCELLED';
+  }
+  return 'CONNECTION_FAILED';
+}
