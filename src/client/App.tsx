@@ -9,8 +9,10 @@ import {
   CloudOff,
   Copy,
   ExternalLink,
+  Eye,
   FileText,
   Filter,
+  HelpCircle,
   Inbox,
   Info,
   KeyRound,
@@ -37,6 +39,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
+import { parseAccountTextSmart, parseAccountLineSmart, type ParseMode, type SmartParsedAccount } from '../shared/account-parser.js';
 
 type Provider = 'gmx' | 'rambler' | 'microsoft' | 'mailru';
 type CredentialType = 'appPassword' | 'oauth2';
@@ -190,60 +193,14 @@ const credentialForProvider = (provider: Provider): CredentialType =>
 function parseAccountLine(
   line: string,
 ): { email: string; secret?: string; refreshToken?: string; clientId?: string } | null {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.startsWith('#')) return null;
-
-  const separators = ['----', '\t', '|'];
-  for (const separator of separators) {
-    if (trimmed.includes(separator)) {
-      const parts = trimmed.split(separator).map((s) => s.trim()).filter(Boolean);
-      if (parts.length >= 2) {
-        const email = parts[0];
-        if (!isEmail(email)) return null;
-
-        let secret = '';
-        let refreshToken: string | undefined = undefined;
-        let clientId: string | undefined = undefined;
-
-        for (let i = 1; i < parts.length; i++) {
-          const part = parts[i];
-          if (part.startsWith('M.C') || part.length > 100) {
-            refreshToken = part;
-          } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(part)) {
-            clientId = part;
-          } else if (i === 1) {
-            secret = part;
-          }
-        }
-
-        return { email, secret: secret || undefined, refreshToken, clientId };
-      }
-    }
-  }
-
-  const colonMatch = trimmed.match(/^([^\s:]+@[^\s:]+)\s*:\s*(.+)$/);
-  if (colonMatch) {
-    const email = colonMatch[1].trim();
-    const rest = colonMatch[2].trim();
-    const parts = rest.split(':').map((s) => s.trim()).filter(Boolean);
-
-    let secret = parts[0] || '';
-    let refreshToken: string | undefined = undefined;
-    let clientId: string | undefined = undefined;
-
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      if (part.startsWith('M.C') || part.length > 100) {
-        refreshToken = part;
-      } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(part)) {
-        clientId = part;
-      }
-    }
-
-    return { email, secret: secret || undefined, refreshToken, clientId };
-  }
-
-  return isEmail(trimmed) ? { email: trimmed } : null;
+  const parsed = parseAccountLineSmart(line);
+  if (!parsed) return null;
+  return {
+    email: parsed.email,
+    secret: parsed.secret || undefined,
+    refreshToken: parsed.refreshToken,
+    clientId: parsed.clientId,
+  };
 }
 
 function parseSingleAccountInput(
@@ -353,6 +310,25 @@ export function App() {
   // Left panel mode: single vs batch tab (Requirement 2: Default to single)
   const [addAccountTab, setAddAccountTab] = useState<'single' | 'batch'>('single');
 
+  // Smart multi-format batch import states
+  const [parseMode, setParseMode] = useState<ParseMode>('auto');
+  const [customDelimiter, setCustomDelimiter] = useState('');
+  const [debouncedPasteText, setDebouncedPasteText] = useState('');
+  const [filterOnlyLowConfidence, setFilterOnlyLowConfidence] = useState(false);
+  const [fieldOverrides, setFieldOverrides] = useState<Record<number, { type: 'password' | 'token'; val: string }>>({});
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedPasteText(pasteText);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [pasteText]);
+
+  const liveParseResult = useMemo(() => {
+    if (!debouncedPasteText.trim()) return null;
+    return parseAccountTextSmart(debouncedPasteText, MAX_ACCOUNTS_LIMIT, parseMode, customDelimiter);
+  }, [debouncedPasteText, parseMode, customDelimiter]);
+
   const [maxMessagesPerAccount, setMaxMessagesPerAccount] = useState(15);
   const [lookbackMinutes, setLookbackMinutes] = useState(0); // 0 = 不限时间
   const [jobId, setJobId] = useState<string | null>(null);
@@ -395,6 +371,45 @@ export function App() {
     }, 250);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  // Sidebar Smart Accordion Collapse States
+  const [isImportSectionCollapsed, setIsImportSectionCollapsed] = useState(false); // Default: OPEN
+  const [isQueueSectionCollapsed, setIsQueueSectionCollapsed] = useState(true);   // Default: COLLAPSED
+
+  // Pop-up Modal Preview State & Memos
+  const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+  const [previewSearchQuery, setPreviewSearchQuery] = useState('');
+  const [previewPage, setPreviewPage] = useState(1);
+  const PREVIEW_PAGE_SIZE = 10;
+
+  const filteredPreviewAccounts = useMemo(() => {
+    if (!liveParseResult) return [];
+    return liveParseResult.accounts.filter((acc) => {
+      if (filterOnlyLowConfidence && acc.confidence !== 'low') return false;
+      if (previewSearchQuery.trim()) {
+        const q = previewSearchQuery.toLowerCase();
+        const matchEmail = acc.email.toLowerCase().includes(q);
+        const matchSecret = (acc.secret || acc.refreshToken || '').toLowerCase().includes(q);
+        return matchEmail || matchSecret;
+      }
+      return true;
+    });
+  }, [liveParseResult, filterOnlyLowConfidence, previewSearchQuery]);
+
+  const totalPreviewPages = useMemo(() => {
+    return Math.max(1, Math.ceil(filteredPreviewAccounts.length / PREVIEW_PAGE_SIZE));
+  }, [filteredPreviewAccounts.length]);
+
+  const currentPreviewPage = Math.min(previewPage, totalPreviewPages);
+
+  const paginatedPreviewAccounts = useMemo(() => {
+    const start = (currentPreviewPage - 1) * PREVIEW_PAGE_SIZE;
+    return filteredPreviewAccounts.slice(start, start + PREVIEW_PAGE_SIZE);
+  }, [filteredPreviewAccounts, currentPreviewPage]);
+
+  useEffect(() => {
+    setPreviewPage(1);
+  }, [previewSearchQuery, filterOnlyLowConfidence, debouncedPasteText]);
 
   // Dynamic Theme evaluation
   useEffect(() => {
@@ -581,62 +596,83 @@ export function App() {
       return;
     }
 
-    let rejected = 0;
+    const result = parseAccountTextSmart(pasteText, MAX_ACCOUNTS_LIMIT, parseMode, customDelimiter);
+    if (result.accounts.length === 0) {
+      notify('error', '未解析出有效的全新邮箱账号');
+      return;
+    }
+
     let microsoftCount = 0;
     const known = new Set(accounts.map((account) => accountKey(account.email)));
-    const parsed: Account[] = [];
+    const newAccounts: Account[] = [];
 
-    for (const line of pasteText.split(/\r?\n/)) {
-      const entry = parseAccountLine(line);
-      if (!entry) {
-        if (line.trim() && !line.trim().startsWith('#')) rejected += 1;
-        continue;
-      }
-      const provider = providerForEmail(entry.email);
-      const key = accountKey(entry.email);
-      if (
-        !isEmail(entry.email) ||
-        !provider ||
-        known.has(key) ||
-        accounts.length + parsed.length >= MAX_ACCOUNTS_LIMIT
-      ) {
-        rejected += 1;
+    for (const acc of result.accounts) {
+      const key = accountKey(acc.email);
+      if (known.has(key) || accounts.length + newAccounts.length >= MAX_ACCOUNTS_LIMIT) {
         continue;
       }
       known.add(key);
+
+      const override = fieldOverrides[acc.lineNumber];
+      let secret = acc.secret;
+      let refreshToken = acc.refreshToken;
+
+      if (override) {
+        if (override.type === 'token') {
+          refreshToken = override.val;
+          secret = '';
+        } else {
+          secret = override.val;
+          refreshToken = undefined;
+        }
+      }
+
+      const provider = acc.provider;
       if (provider === 'microsoft') microsoftCount += 1;
-      parsed.push({
+
+      newAccounts.push({
         id: createId(),
-        email: entry.email.trim(),
+        email: acc.email,
         provider,
         credentialType: credentialForProvider(provider),
-        secret: entry.secret ?? '',
-        refreshToken: entry.refreshToken,
-        clientId: entry.clientId,
-        oauthState: provider === 'microsoft' ? (entry.refreshToken ? 'authorized' : 'not_started') : undefined,
+        secret,
+        refreshToken,
+        clientId: acc.clientId,
+        oauthState: provider === 'microsoft' ? (refreshToken ? 'authorized' : 'not_started') : undefined,
         status: 'draft',
       });
     }
 
-    if (parsed.length === 0) {
-      notify('error', '未解析出有效的全新邮箱格式');
+    if (newAccounts.length === 0) {
+      notify('info', '包含的账号均已在队列中或超出上限');
       return;
     }
 
-    setAccounts((current) => [...current, ...parsed]);
+    setAccounts((current) => [...current, ...newAccounts]);
     setPasteText('');
+    setFieldOverrides({});
+    setFilterOnlyLowConfidence(false);
+
+    // Auto-switch Accordion: collapse Import section, expand Queue section!
+    setIsImportSectionCollapsed(true);
+    setIsQueueSectionCollapsed(false);
+
     if (microsoftCount > 0) {
-      notify('info', `成功导入 ${parsed.length} 个账号，其中包含 ${microsoftCount} 个 Microsoft 账户`);
+      notify('info', `成功导入 ${newAccounts.length} 个账号，其中包含 ${microsoftCount} 个 Microsoft 账户`);
     } else {
-      notify('success', `成功添加 ${parsed.length} 个新账号至队列`);
+      notify('success', `成功添加 ${newAccounts.length} 个新账号至队列`);
     }
   };
 
   const addAccount = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const parsed = parseSingleAccountInput(singleRawInput) ?? (draft.email ? { email: draft.email.trim(), provider: draft.provider, secret: draft.secret.trim() } : null);
+    const smartParsed = parseAccountLineSmart(singleRawInput, 1, parseMode, customDelimiter);
+    const parsed = smartParsed
+      ? { email: smartParsed.email, provider: smartParsed.provider, secret: smartParsed.secret || smartParsed.refreshToken || '' }
+      : parseSingleAccountInput(singleRawInput) ?? (draft.email ? { email: draft.email.trim(), provider: draft.provider, secret: draft.secret.trim() } : null);
+
     if (!parsed || !isEmail(parsed.email)) {
-      notify('error', '请粘贴或输入正确的邮箱格式 (例如: 账号----密码)');
+      notify('error', '未从输入内容中识别出有效的邮箱账号格式');
       return;
     }
     if (accounts.length >= MAX_ACCOUNTS_LIMIT) {
@@ -644,7 +680,7 @@ export function App() {
       return;
     }
     if (parsed.provider !== 'microsoft' && !parsed.secret) {
-      notify('error', '请填写该邮箱密码');
+      notify('error', '请填写该邮箱密码或令牌');
       return;
     }
     if (accounts.some((account) => accountKey(account.email) === accountKey(parsed.email))) {
@@ -666,6 +702,11 @@ export function App() {
     ]);
     setSingleRawInput('');
     setDraft(defaultDraft);
+
+    // Auto-switch Accordion: collapse Import section, expand Queue section!
+    setIsImportSectionCollapsed(true);
+    setIsQueueSectionCollapsed(false);
+
     notify('success', `已添加 ${parsed.email}`);
   };
 
@@ -1104,15 +1145,24 @@ export function App() {
       <main className={`workspace active-mobile-${activeMobileTab}`}>
         {/* Left Sidebar Panel */}
         <aside className="sidebar-column">
-          {/* Requirement 2: Combined Add Account Card with Tab Switcher (Single vs Batch) */}
-          <div className="surface-card add-account-card">
-            {/* Card Header with Tabs */}
-            <div className="add-tab-header">
+          <div className={`surface-card add-account-card ${isImportSectionCollapsed ? 'is-collapsed' : 'is-expanded'}`}>
+            {/* Card Header with Tabs & Accordion Toggle */}
+            <div
+              className="add-tab-header clickable-accordion-header"
+              onClick={() => setIsImportSectionCollapsed(!isImportSectionCollapsed)}
+            >
               <div className="add-tabs-wrap">
                 <button
                   type="button"
                   className={`add-tab-btn ${addAccountTab === 'single' ? 'active' : ''}`}
-                  onClick={() => setAddAccountTab('single')}
+                  onClick={(e) => {
+                    if (isImportSectionCollapsed) {
+                      setIsImportSectionCollapsed(false);
+                    } else {
+                      e.stopPropagation();
+                      setAddAccountTab('single');
+                    }
+                  }}
                 >
                   <KeyRound size={13} />
                   <span>单账号添加</span>
@@ -1120,246 +1170,341 @@ export function App() {
                 <button
                   type="button"
                   className={`add-tab-btn ${addAccountTab === 'batch' ? 'active' : ''}`}
-                  onClick={() => setAddAccountTab('batch')}
+                  onClick={(e) => {
+                    if (isImportSectionCollapsed) {
+                      setIsImportSectionCollapsed(false);
+                    } else {
+                      e.stopPropagation();
+                      setAddAccountTab('batch');
+                    }
+                  }}
                 >
                   <ClipboardPaste size={13} />
                   <span>批量导入</span>
                 </button>
               </div>
 
-              {/* Stylish Capacity Badge */}
-              <span className="import-capacity-tag">
-                <Sparkles size={11} className="text-amber" />
-                <span>支持 40+ 账号并发导入</span>
-              </span>
-            </div>
-
-            {/* Tab 1: Single Account Form (Default) */}
-            {addAccountTab === 'single' ? (
-              <form onSubmit={addAccount} className="tab-form-content">
-                <div className="form-field full-width">
-                  <label htmlFor="input-single-raw">粘贴或输入账号信息 (邮箱地址----应用密码)</label>
-                  <input
-                    id="input-single-raw"
-                    value={singleRawInput}
-                    onChange={(event) => {
-                      const val = event.target.value;
-                      setSingleRawInput(val);
-                      const parsed = parseSingleAccountInput(val);
-                      if (parsed) {
-                        setDraft({ email: parsed.email, provider: parsed.provider, secret: parsed.secret });
-                      }
-                    }}
-                    type="text"
-                    autoComplete="off"
-                    placeholder="邮箱地址----应用密码"
-                    disabled={isRunning}
-                  />
-                </div>
-
-                {draft.email && (
-                  <div className="auto-parsed-preview-bar">
-                    <span className="parsed-label">智能识别:</span>
-                    <span className="parsed-email">{draft.email}</span>
-                    <span className={`provider-pill provider-${draft.provider}`}>
-                      {providerDetails[draft.provider].label}
+              <div className="header-accordion-actions">
+                {isImportSectionCollapsed ? (
+                  <span className="accordion-status-badge">点击展开</span>
+                ) : (
+                  <div className="header-help-capacity-group" onClick={(e) => e.stopPropagation()}>
+                    <span className="import-capacity-tag">
+                      <Sparkles size={11} className="text-amber" />
+                      <span>支持并发</span>
                     </span>
+                    {/* Sleek Tooltip Popover Icon [?] */}
+                    <div className="help-tooltip-wrap">
+                      <HelpCircle size={14} className="help-icon-btn" />
+                      <div className="help-tooltip-popover">
+                        <div className="tooltip-title">
+                          <Sparkles size={12} className="text-amber" />
+                          <span>支持邮箱及导入格式说明</span>
+                        </div>
+                        <div className="tooltip-content">
+                          <div className="tooltip-item">
+                            <strong>1. Microsoft 阵列 (Outlook/Hotmail/MSN):</strong>
+                            <span>4段式 Graph 刷新令牌 (免登录推荐):</span>
+                            <code>邮箱----密码----客户端ID----刷新令牌</code>
+                            <span>在线一键授权:</span>
+                            <code>name@outlook.com</code>
+                          </div>
+                          <div className="tooltip-item">
+                            <strong>2. Mail.ru 邮箱:</strong>
+                            <code>name@mail.ru----外置应用专用密码</code>
+                          </div>
+                          <div className="tooltip-item">
+                            <strong>3. GMX 邮箱:</strong>
+                            <code>name@gmx.com----密码</code>
+                          </div>
+                          <div className="tooltip-item">
+                            <strong>4. Rambler 邮箱:</strong>
+                            <code>name@rambler.ru----密码</code>
+                          </div>
+                          <div className="tooltip-item">
+                            <strong>5. 智能键值 / JSON / 自定义:</strong>
+                            <code>【账号: x@y.com | 密码: 123】</code>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
-
-                <button className="btn btn-emerald full-width mt-1" type="submit" disabled={isRunning || !singleRawInput.trim()}>
-                  <Plus size={15} />
-                  <span>加入账号队列</span>
-                </button>
-
-                {/* Format Guide Box with All Supported Providers & Formats */}
-                <div className="format-guide-box">
-                  <div className="format-guide-title">
-                    <FileText size={13} />
-                    <span>支持邮箱及导入格式说明：</span>
-                  </div>
-                  
-                  <div className="format-item-group">
-                    <div className="format-group-title">
-                      <span className="fmt-provider-tag tag-microsoft">1. Microsoft 阵列</span>
-                      <span className="fmt-domain-list">(Outlook / Hotmail / Offilive / Live / MSN)</span>
-                    </div>
-                    <div className="format-item">
-                      <span className="fmt-desc">4段式 Graph 刷新令牌 (免登录推荐):</span>
-                      <code>邮箱----密码----客户端ID----刷新令牌</code>
-                    </div>
-                    <div className="format-item">
-                      <span className="fmt-desc">在线一键授权:</span>
-                      <code>name@outlook.com</code>
-                    </div>
-                  </div>
-
-                  <div className="format-item-group">
-                    <div className="format-group-title">
-                      <span className="fmt-provider-tag tag-mailru">2. Mail.ru 邮箱</span>
-                      <span className="fmt-domain-list">(Mail.ru / Inbox.ru / List.ru / Bk.ru)</span>
-                    </div>
-                    <div className="format-item">
-                      <code>name@mail.ru----外置应用专用密码</code>
-                    </div>
-                  </div>
-
-                  <div className="format-item-group">
-                    <div className="format-group-title">
-                      <span className="fmt-provider-tag tag-gmx">3. GMX 邮箱</span>
-                      <span className="fmt-domain-list">(GMX.com / GMX.net / GMX.de)</span>
-                    </div>
-                    <div className="format-item">
-                      <code>name@gmx.com----密码</code>
-                    </div>
-                  </div>
-
-                  <div className="format-item-group">
-                    <div className="format-group-title">
-                      <span className="fmt-provider-tag tag-rambler">4. Rambler 邮箱</span>
-                      <span className="fmt-domain-list">(Rambler.ru / Lenta.ru / Ro.ru)</span>
-                    </div>
-                    <div className="format-item">
-                      <code>name@rambler.ru----密码</code>
-                    </div>
-                  </div>
-                </div>
-              </form>
-            ) : (
-              /* Tab 2: Batch Import Form (Taller Textarea Height) */
-              <div className="tab-form-content">
-                <textarea
-                  className="batch-textarea batch-textarea-tall"
-                  value={pasteText}
-                  onChange={(event) => setPasteText(event.target.value)}
-                  placeholder={`# 【批量导入统一格式说明 - 每行一个账号】
-
-# 1. 微软 / Outlook / Hotmail / Offilive (4段式 Graph 刷新令牌免登录抓取推荐)
-邮箱----密码----客户端ID----刷新令牌
-
-# 2. 微软 / Outlook / Hotmail / Offilive (在线 OAuth 一键授权)
-name@outlook.com
-name@hotmail.com
-
-# 3. Mail.ru 邮箱 (使用外置应用专用密码)
-name@mail.ru----外置应用专用密码
-
-# 4. GMX 邮箱 (使用账号密码)
-name@gmx.com----密码
-
-# 5. Rambler 邮箱 (使用账号密码)
-name@rambler.ru----密码`}
-                  spellCheck={false}
-                  autoComplete="off"
-                  disabled={isRunning}
+                <ChevronDown
+                  size={15}
+                  className={`collapse-arrow ${isImportSectionCollapsed ? 'collapsed' : ''}`}
                 />
-                <div className="card-footer mt-1">
-                  <span className="security-subtext">
-                    <LockKeyhole size={12} />
-                    <span>凭据不落盘，关闭页面即清空</span>
-                  </span>
-                  <div className="action-row">
-                    {pasteText && (
-                      <button
-                        className="icon-btn"
-                        type="button"
-                        onClick={() => setPasteText('')}
-                        disabled={isRunning}
-                        title="清空"
+              </div>
+            </div>
+
+            {!isImportSectionCollapsed && (
+              <>
+                {/* Tab 1: Single Account Form (Default) */}
+                {addAccountTab === 'single' ? (
+                  <form onSubmit={addAccount} className="tab-form-content">
+                    {/* Sleek Single-Line Parse Mode Selector */}
+                    <div className="parse-mode-dropdown-row">
+                      <span className="dropdown-inline-label">
+                        <Sparkles size={12} className="text-cyan" />
+                        <span>识别模式:</span>
+                      </span>
+                      <SelectField
+                        value={parseMode}
+                        onChange={(val) => setParseMode(val as ParseMode)}
+                        ariaLabel="单账号导入解析模式选择"
                       >
-                        <X size={14} />
-                      </button>
+                        <option value="auto">🤖 智能自动识别 (推荐)</option>
+                        <option value="kv">🏷️ 标签键值模式 (如【账号: xx | 密码: yy】)</option>
+                        <option value="four_parts">⚡ 标准四段式 (Graph 刷新令牌)</option>
+                        <option value="json">📦 JSON / URL Query</option>
+                        <option value="custom">🔀 自定义分隔符</option>
+                      </SelectField>
+                    </div>
+
+                    {parseMode === 'custom' && (
+                      <div className="custom-delimiter-input-row">
+                        <span className="custom-delim-label">分隔符:</span>
+                        <input
+                          type="text"
+                          value={customDelimiter}
+                          onChange={(e) => setCustomDelimiter(e.target.value)}
+                          placeholder="如: | 或 ::: 或 #"
+                          className="custom-delim-field"
+                        />
+                      </div>
                     )}
+
+                    <div className="form-group mb-1">
+                      <input
+                        type="text"
+                        value={singleRawInput}
+                        onChange={(e) => setSingleRawInput(e.target.value)}
+                        placeholder="支持粘贴 账号----密码 或 【账号: xx | 密码: yy】"
+                        disabled={isRunning}
+                        className="single-input-field"
+                      />
+                    </div>
+
                     <button
-                      className="btn btn-secondary btn-sm"
-                      type="button"
-                      onClick={importAccounts}
-                      disabled={isRunning || !pasteText.trim()}
+                      className="btn btn-emerald btn-block"
+                      type="submit"
+                      disabled={isRunning || !singleRawInput.trim()}
                     >
                       <Plus size={14} />
-                      <span>导入至队列</span>
+                      <span>加入账号队列</span>
                     </button>
+                  </form>
+                ) : (
+                  /* Tab 2: Batch Accounts Import Form */
+                  <div className="tab-form-content">
+                    {/* Sleek Single-Line Parse Mode Selector */}
+                    <div className="parse-mode-dropdown-row">
+                      <span className="dropdown-inline-label">
+                        <Sparkles size={12} className="text-cyan" />
+                        <span>识别模式:</span>
+                      </span>
+                      <SelectField
+                        value={parseMode}
+                        onChange={(val) => setParseMode(val as ParseMode)}
+                        ariaLabel="批量导入解析模式选择"
+                      >
+                        <option value="auto">🤖 智能自动识别 (推荐)</option>
+                        <option value="kv">🏷️ 标签键值模式 (如【账号: xx | 密码: yy】)</option>
+                        <option value="four_parts">⚡ 标准四段式 (Graph 刷新令牌)</option>
+                        <option value="json">📦 JSON / URL Query</option>
+                        <option value="custom">🔀 自定义分隔符</option>
+                      </SelectField>
+                    </div>
+
+                    {parseMode === 'custom' && (
+                      <div className="custom-delimiter-input-row">
+                        <span className="custom-delim-label">分隔符:</span>
+                        <input
+                          type="text"
+                          value={customDelimiter}
+                          onChange={(e) => setCustomDelimiter(e.target.value)}
+                          placeholder="如: | 或 ::: 或 #"
+                          className="custom-delim-field"
+                        />
+                      </div>
+                    )}
+
+                    {/* 3. Batch Input Textarea */}
+                    <textarea
+                      className="batch-textarea batch-textarea-tall"
+                      value={pasteText}
+                      onChange={(event) => setPasteText(event.target.value)}
+                      placeholder={`# 【智能多格式批量导入 - 支持任意粘贴】
+# 1. 标签键值对格式 (包含【】、账号:密码: 等):
+【账号: demo_user@domain.com | 密码: DemoPassword123】
+账号：name@outlook.com ； 密码：Pass123
+
+# 2. 经典分隔符 / 4段式 Graph 刷新令牌 (支持 ----、|、:、Tab、逗号):
+name@outlook.com----密码----客户端ID----刷新令牌
+name@mail.ru----外置应用专用密码`}
+                      spellCheck={false}
+                      autoComplete="off"
+                      disabled={isRunning}
+                    />
+
+                    {/* 4. Live Intelligence Summary Bar */}
+                    {liveParseResult && liveParseResult.accounts.length > 0 && (
+                      <div className="live-parse-summary-bar">
+                        <div className="summary-info">
+                          <CheckCircle2 size={14} className="text-emerald" />
+                          <span>识别成功 <strong>{liveParseResult.stats.validCount}</strong> 个账号</span>
+                          {liveParseResult.stats.lowConfidenceCount > 0 && (
+                            <span className="summary-badge-warning">
+                              {liveParseResult.stats.lowConfidenceCount} 需核对
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-link-preview"
+                          onClick={() => setIsPreviewModalOpen(true)}
+                        >
+                          <Eye size={12} />
+                          <span>查看详情与核对</span>
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="card-footer mt-1">
+                      <span className="security-subtext">
+                        <LockKeyhole size={11} />
+                        <span>内存即用即清</span>
+                      </span>
+                      <div className="action-row">
+                        {pasteText && (
+                          <button
+                            className="icon-btn"
+                            type="button"
+                            onClick={() => {
+                              setPasteText('');
+                              setFieldOverrides({});
+                              setFilterOnlyLowConfidence(false);
+                            }}
+                            disabled={isRunning}
+                            title="清空"
+                          >
+                            <X size={14} />
+                          </button>
+                        )}
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          type="button"
+                          onClick={importAccounts}
+                          disabled={isRunning || !pasteText.trim() || (liveParseResult?.accounts.length ?? 0) === 0}
+                        >
+                          <Plus size={13} />
+                          <span>
+                            {liveParseResult && liveParseResult.accounts.length > 0
+                              ? `导入 ${liveParseResult.accounts.length} 个账号`
+                              : '导入至队列'}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
+                )}
+              </>
             )}
           </div>
 
-          {/* Account Queue Management List (Expanded Height & Pinned Layout) */}
-          <div className="surface-card account-queue-card">
-            <div className="card-header border-b">
+          {/* Account Queue Management List (Smart Accordion Enabled) */}
+          <div className={`surface-card account-queue-card ${isQueueSectionCollapsed ? 'is-collapsed' : 'is-expanded'}`}>
+            <div
+              className="card-header border-b clickable-accordion-header"
+              onClick={() => setIsQueueSectionCollapsed(!isQueueSectionCollapsed)}
+            >
               <div className="card-title">
                 <UserCheck size={15} className="text-cyan" />
                 <span>账号队列 ({accounts.length})</span>
               </div>
-              {accounts.length > 0 && (
-                <div className="queue-header-actions">
-                  {totalQueuePages > 1 && (
-                    <div className="queue-pagination-ctrls">
-                      <span className="queue-page-text">{currentQueuePage}/{totalQueuePages}页</span>
+              <div className="header-accordion-actions">
+                {isQueueSectionCollapsed && (
+                  <span className="accordion-status-badge badge-emerald">
+                    {accounts.length > 0 ? `${accounts.length} 个就绪` : '点击展开'}
+                  </span>
+                )}
+                {accounts.length > 0 && !isQueueSectionCollapsed && (
+                  <div className="queue-header-actions" onClick={(e) => e.stopPropagation()}>
+                    {totalQueuePages > 1 && (
+                      <div className="queue-pagination-ctrls">
+                        <span className="queue-page-text">{currentQueuePage}/{totalQueuePages}页</span>
+                        <button
+                          type="button"
+                          className="queue-page-btn"
+                          onClick={() => setQueuePage((p) => Math.max(1, p - 1))}
+                          disabled={currentQueuePage <= 1}
+                          title="上一页"
+                        >
+                          <ChevronLeft size={11} />
+                        </button>
+                        <button
+                          type="button"
+                          className="queue-page-btn"
+                          onClick={() => setQueuePage((p) => Math.min(totalQueuePages, p + 1))}
+                          disabled={currentQueuePage >= totalQueuePages}
+                          title="下一页"
+                        >
+                          <ChevronRight size={11} />
+                        </button>
+                      </div>
+                    )}
+                    {!isRunning && (
                       <button
+                        className="btn btn-xs btn-outline-danger"
                         type="button"
-                        className="queue-page-btn"
-                        onClick={() => setQueuePage((p) => Math.max(1, p - 1))}
-                        disabled={currentQueuePage <= 1}
-                        title="上一页"
+                        onClick={() => { setAccounts([]); setQueuePage(1); }}
+                        title="清空队列中的所有账号"
                       >
-                        <ChevronLeft size={11} />
+                        <Trash2 size={11} />
+                        <span>清空全部</span>
                       </button>
-                      <button
-                        type="button"
-                        className="queue-page-btn"
-                        onClick={() => setQueuePage((p) => Math.min(totalQueuePages, p + 1))}
-                        disabled={currentQueuePage >= totalQueuePages}
-                        title="下一页"
-                      >
-                        <ChevronRight size={11} />
-                      </button>
-                    </div>
-                  )}
-                  {!isRunning && (
-                    <button
-                      className="btn btn-xs btn-outline-danger"
-                      type="button"
-                      onClick={() => { setAccounts([]); setQueuePage(1); }}
-                      title="清空队列中的所有账号"
-                    >
-                      <Trash2 size={11} />
-                      <span>清空全部</span>
-                    </button>
-                  )}
-                </div>
-              )}
+                    )}
+                  </div>
+                )}
+                <ChevronDown
+                  size={15}
+                  className={`collapse-arrow ${isQueueSectionCollapsed ? 'collapsed' : ''}`}
+                />
+              </div>
             </div>
 
-            <div className="queue-scroll-container">
-              {paginatedAccounts.length > 0 ? (
-                paginatedAccounts.map((account) => (
-                  <AccountQueueCard
-                    key={account.id}
-                    account={account}
-                    disabled={isRunning}
-                    isEditingSecret={editingSecretId === account.id}
-                    editSecretValue={editSecretValue}
-                    onStartEditSecret={(val) => {
-                      setEditingSecretId(account.id);
-                      setEditSecretValue(val);
-                    }}
-                    onCancelEditSecret={() => setEditingSecretId(null)}
-                    onSaveEditSecret={(val) => saveEditedSecret(account.id, val)}
-                    onEditSecretChange={setEditSecretValue}
-                    onRemove={() => removeAccount(account.id)}
-                    onProviderChange={(p) => updateAccountProvider(account.id, p)}
-                    onConnect={() => void startMicrosoftOAuth(account)}
-                  />
-                ))
-              ) : (
-                <div className="empty-state">
-                  <Mail size={22} className="text-muted" />
-                  <p>队列为空，请在上方添加或批量粘贴邮箱账户</p>
-                </div>
-              )}
-            </div>
+            {!isQueueSectionCollapsed && (
+              <div className="queue-scroll-container">
+                {paginatedAccounts.length > 0 ? (
+                  paginatedAccounts.map((account) => (
+                    <AccountQueueCard
+                      key={account.id}
+                      account={account}
+                      disabled={isRunning}
+                      isEditingSecret={editingSecretId === account.id}
+                      editSecretValue={editSecretValue}
+                      onStartEditSecret={(val) => {
+                        setEditingSecretId(account.id);
+                        setEditSecretValue(val);
+                      }}
+                      onCancelEditSecret={() => setEditingSecretId(null)}
+                      onSaveEditSecret={(val) => saveEditedSecret(account.id, val)}
+                      onEditSecretChange={setEditSecretValue}
+                      onRemove={() => removeAccount(account.id)}
+                      onProviderChange={(p) => updateAccountProvider(account.id, p)}
+                      onConnect={() => void startMicrosoftOAuth(account)}
+                    />
+                  ))
+                ) : (
+                  <div className="empty-state">
+                    <div className="empty-icon-wrap">
+                      <Mail size={18} />
+                    </div>
+                    <p>队列为空，请在上方添加或批量粘贴邮箱账户</p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Execution Controls & Settings */}
@@ -1447,16 +1592,19 @@ name@rambler.ru----密码`}
             <div className="toolbar-controls">
               {/* Account Dropdown Filter */}
               <div className="filter-select-wrap">
-                <Filter size={14} />
-                <select value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)}>
+                <Filter size={13} />
+                <SelectField
+                  value={accountFilter}
+                  onChange={(val) => setAccountFilter(val)}
+                  ariaLabel="筛选指定邮箱账号"
+                >
                   <option value="all">全部账户 ({accounts.length})</option>
                   {accounts.map((acc) => (
                     <option key={acc.id} value={acc.email}>
                       {acc.email} ({acc.messages?.length ?? 0} 封)
                     </option>
                   ))}
-                </select>
-                <ChevronDown size={14} />
+                </SelectField>
               </div>
 
               {/* Mobile Toolbar Bottom Actions */}
@@ -1584,6 +1732,247 @@ name@rambler.ru----密码`}
           onClose={() => setSelectedMailModal(null)}
           onCopyCode={(code) => void copyCode(code)}
         />
+      )}
+
+      {/* Smart Import Preview Modal (Pop-up 画面) */}
+      {isPreviewModalOpen && liveParseResult && (
+        <div className="modal-backdrop" onClick={() => setIsPreviewModalOpen(false)}>
+          <div className="preview-modal-dialog" onClick={(e) => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div className="modal-header">
+              <div className="modal-title-group">
+                <Sparkles size={16} className="text-cyan" />
+                <h3>智能识别账号详情 (共 {liveParseResult.stats.validCount} 个账号)</h3>
+                <div className="header-fmt-tags">
+                  {liveParseResult.stats.formatCounts.kv_bracket > 0 && (
+                    <span className="fmt-pill tag-kv">
+                      标签键值 ({liveParseResult.stats.formatCounts.kv_bracket})
+                    </span>
+                  )}
+                  {liveParseResult.stats.formatCounts.delimiter > 0 && (
+                    <span className="fmt-pill tag-delim">
+                      分隔符/四段式 ({liveParseResult.stats.formatCounts.delimiter})
+                    </span>
+                  )}
+                  {liveParseResult.stats.formatCounts.json_query > 0 && (
+                    <span className="fmt-pill tag-json">
+                      JSON/Query ({liveParseResult.stats.formatCounts.json_query})
+                    </span>
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="icon-btn modal-close-btn"
+                onClick={() => setIsPreviewModalOpen(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Modal Toolbar: Search + Filter */}
+            <div className="preview-modal-toolbar">
+              <div className="preview-search-input-wrap">
+                <Search size={13} className="search-icon" />
+                <input
+                  type="text"
+                  className="preview-search-input"
+                  placeholder="搜索邮箱地址或凭据密码..."
+                  value={previewSearchQuery}
+                  onChange={(e) => setPreviewSearchQuery(e.target.value)}
+                />
+                {previewSearchQuery && (
+                  <button
+                    type="button"
+                    className="clear-search-btn"
+                    onClick={() => setPreviewSearchQuery('')}
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+              {liveParseResult.stats.lowConfidenceCount > 0 && (
+                <button
+                  type="button"
+                  className={`filter-low-btn ${filterOnlyLowConfidence ? 'active' : ''}`}
+                  onClick={() => setFilterOnlyLowConfidence(!filterOnlyLowConfidence)}
+                >
+                  <Filter size={12} />
+                  <span>仅看需核对 ({liveParseResult.stats.lowConfidenceCount})</span>
+                </button>
+              )}
+            </div>
+
+            {/* Modal Body: High Resolution Table */}
+            <div className="preview-modal-body">
+              {paginatedPreviewAccounts.length === 0 ? (
+                <div className="empty-preview-state">
+                  <Info size={24} className="text-muted" />
+                  <span>未检索到符合条件的识别结果</span>
+                </div>
+              ) : (
+                <div className="preview-table-container">
+                  <table className="modal-preview-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: '40px' }}>#</th>
+                        <th>邮箱地址</th>
+                        <th>服务商</th>
+                        <th>提取凭据内容</th>
+                        <th style={{ width: '90px' }}>置信度</th>
+                        <th style={{ width: '100px' }}>手动修正</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedPreviewAccounts.map((acc, idx) => {
+                        const lineIdx = (currentPreviewPage - 1) * PREVIEW_PAGE_SIZE + idx + 1;
+                        const override = fieldOverrides[acc.lineNumber];
+                        const currentType = override
+                          ? override.type
+                          : acc.refreshToken
+                          ? 'token'
+                          : 'password';
+                        const displaySecret = override
+                          ? override.val
+                          : acc.refreshToken || acc.secret || '(授权模式)';
+
+                        const isLongSecret = displaySecret.length > 24;
+                        const shortSecretText = isLongSecret
+                          ? `${displaySecret.slice(0, 10)}...${displaySecret.slice(-6)}`
+                          : displaySecret;
+
+                        return (
+                          <tr
+                            key={acc.lineNumber}
+                            className={`preview-tr ${
+                              acc.confidence === 'low' ? 'row-highlight-warning' : ''
+                            }`}
+                          >
+                            <td className="col-idx">{lineIdx}</td>
+                            <td className="col-email">{acc.email}</td>
+                            <td className="col-provider">
+                              <span className={`provider-pill provider-${acc.provider}`}>
+                                {providerDetails[acc.provider].label}
+                              </span>
+                            </td>
+                            <td className="col-secret">
+                              <div className="credential-cell-wrap">
+                                <span className={`credential-tag-pill type-${currentType}`}>
+                                  {currentType === 'token' ? '刷新令牌' : '密码'}
+                                </span>
+                                <code
+                                  className="secret-code-val"
+                                  title={`完整凭据 (${displaySecret.length} 字符):\n${displaySecret}`}
+                                >
+                                  {shortSecretText}
+                                </code>
+                                <button
+                                  type="button"
+                                  className="btn-copy-secret-chip"
+                                  onClick={() => void copyCode(displaySecret)}
+                                  title="点击一键复制完整凭据内容"
+                                >
+                                  <Copy size={11} />
+                                  <span>复制</span>
+                                </button>
+                              </div>
+                            </td>
+                            <td className="col-confidence">
+                              <span className={`confidence-chip-tag conf-${acc.confidence}`}>
+                                {acc.confidence === 'high'
+                                  ? '高'
+                                  : acc.confidence === 'medium'
+                                  ? '中'
+                                  : '低'}
+                              </span>
+                            </td>
+                            <td className="col-action">
+                              <select
+                                className="field-override-select"
+                                value={currentType}
+                                onChange={(e) => {
+                                  const newType = e.target.value as 'password' | 'token';
+                                  const val = acc.secret || acc.refreshToken || '';
+                                  setFieldOverrides((prev) => ({
+                                    ...prev,
+                                    [acc.lineNumber]: { type: newType, val },
+                                  }));
+                                }}
+                              >
+                                <option value="password">密码</option>
+                                <option value="token">令牌</option>
+                              </select>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer: Pagination + Confirm Button */}
+            <div className="preview-modal-footer">
+              <div className="preview-pagination-bar">
+                <span className="page-info-text">
+                  显示第 {(currentPreviewPage - 1) * PREVIEW_PAGE_SIZE + 1} -{' '}
+                  {Math.min(currentPreviewPage * PREVIEW_PAGE_SIZE, filteredPreviewAccounts.length)} 条
+                  (共 {filteredPreviewAccounts.length} 条)
+                </span>
+                {totalPreviewPages > 1 && (
+                  <div className="page-nav-group">
+                    <button
+                      type="button"
+                      className="page-nav-btn"
+                      disabled={currentPreviewPage <= 1}
+                      onClick={() => setPreviewPage((p) => Math.max(1, p - 1))}
+                    >
+                      <ChevronLeft size={13} />
+                    </button>
+                    <span className="current-page-badge">
+                      {currentPreviewPage} / {totalPreviewPages}
+                    </span>
+                    <button
+                      type="button"
+                      className="page-nav-btn"
+                      disabled={currentPreviewPage >= totalPreviewPages}
+                      onClick={() => setPreviewPage((p) => Math.min(totalPreviewPages, p + 1))}
+                    >
+                      <ChevronRight size={13} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="footer-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setIsPreviewModalOpen(false)}
+                >
+                  关闭
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-emerald btn-sm"
+                  onClick={() => {
+                    importAccounts();
+                    setIsPreviewModalOpen(false);
+                  }}
+                  disabled={isRunning || liveParseResult.accounts.length === 0}
+                >
+                  <Plus size={14} />
+                  <span>
+                    {liveParseResult.stats.lowConfidenceCount > 0
+                      ? `确认并导入 ${liveParseResult.accounts.length} 个账号 (含 ${liveParseResult.stats.lowConfidenceCount} 个需核对)`
+                      : `确认并导入 ${liveParseResult.accounts.length} 个账号`}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Toast Notification Banner */}
@@ -1859,16 +2248,25 @@ function AccountGroupCard({
     (item) => item.codeMatch?.code && item.codeMatch?.confidence !== 'low'
   )?.codeMatch;
 
+  const avatarChar = (accountEmail[0] || 'M').toUpperCase();
+
   return (
-    <div className="account-group-container">
+    <div className={`account-group-container ${collapsed ? 'is-collapsed' : 'is-expanded'}`}>
       <div className="account-group-header" onClick={() => setCollapsed(!collapsed)}>
         <div className="group-header-left">
-          <button className="group-collapse-btn" type="button">
+          <div className="group-collapse-btn">
             <ChevronDown size={16} className={`collapse-arrow ${collapsed ? 'collapsed' : ''}`} />
-          </button>
-          <span className="group-account-email">{accountEmail}</span>
-          <span className={`provider-pill provider-${provider}`}>{providerInfo.label}</span>
-          <span className="group-count-badge">{emails.length} 封邮件</span>
+          </div>
+          <div className="group-avatar-badge" style={{ backgroundColor: providerInfo.badgeColor }}>
+            {avatarChar}
+          </div>
+          <div className="group-title-block">
+            <span className="group-account-email" title={accountEmail}>{accountEmail}</span>
+            <div className="group-meta-chips">
+              <span className={`provider-pill provider-${provider}`}>{providerInfo.label}</span>
+              <span className="group-count-badge">{emails.length} 封邮件</span>
+            </div>
+          </div>
         </div>
         <div className="group-header-right">
           {primaryCode && (
@@ -1880,9 +2278,9 @@ function AccountGroupCard({
               }}
               title="点击复制该邮箱最新验证码"
             >
-              <Sparkles size={12} />
-              <span>验证码: <strong>{primaryCode.code}</strong></span>
-              <Copy size={12} />
+              <Sparkles size={13} className="sparkle-icon" />
+              <span>验证码: <strong className="code-digits-bold">{primaryCode.code}</strong></span>
+              <Copy size={12} className="copy-icon" />
             </div>
           )}
         </div>
@@ -1957,6 +2355,7 @@ function EmailCard({
       <p className="email-snippet">{email.snippet}</p>
 
       <div className="email-card-footer">
+        <span className="list-row-time">{timestampLabel(email.receivedAt)}</span>
         <button className="btn-read-more" type="button" onClick={onOpenModal}>
           <Maximize2 size={12} />
           <span>查看完整正文</span>
@@ -1971,6 +2370,56 @@ function EmailCard({
   );
 }
 
+function convertTextToHtml(text: string): string {
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  
+  // Highlight URLs into clickable links
+  const linked = escaped.replace(
+    /(https?:\/\/[^\s<]+)/g,
+    '<a href="$1" target="_blank" rel="noopener noreferrer" style="color: #0284c7; font-weight: 600; text-decoration: underline;">$1</a>'
+  );
+
+  // Highlight 4-8 digit codes
+  const highlighted = linked.replace(
+    /(\b\d{4,8}\b)/g,
+    '<span style="background: rgba(16, 185, 129, 0.15); color: #059669; font-weight: 800; padding: 2px 6px; border-radius: 4px; font-family: monospace;">$1</span>'
+  );
+
+  // Split lines into formatted paragraphs
+  const paragraphs = highlighted
+    .split('\n')
+    .map((line) => line.trim())
+    .map((line) => line ? `<p style="margin: 0 0 12px 0; line-height: 1.65;">${line}</p>` : '<br/>')
+    .join('');
+
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8"/>
+        <style>
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+            font-size: 13.5px;
+            color: #0f172a;
+            background: #ffffff;
+            padding: 24px;
+            margin: 0;
+            word-wrap: break-word;
+          }
+          p { margin: 0 0 12px 0; line-height: 1.65; }
+        </style>
+      </head>
+      <body>
+        ${paragraphs}
+      </body>
+    </html>
+  `;
+}
+
 function EmailReaderModal({
   email,
   onClose,
@@ -1980,11 +2429,13 @@ function EmailReaderModal({
   onClose: () => void;
   onCopyCode: (code: string) => void;
 }) {
-  const [viewTab, setViewTab] = useState<'html' | 'text'>(email.htmlBody ? 'html' : 'text');
+  const [viewTab, setViewTab] = useState<'html' | 'text'>('html');
   const [copied, setCopied] = useState(false);
   const hasCode = Boolean(email.codeMatch?.code);
   const isHighConfidence = email.codeMatch?.confidence === 'high' || email.codeMatch?.confidence === 'medium';
   const providerLabel = providerDetails[email.provider]?.label ?? email.provider;
+
+  const htmlContentToRender = email.htmlBody || convertTextToHtml(email.textBody || email.snippet || '(无邮件正文内容)');
 
   const handleCopy = () => {
     if (email.codeMatch?.code) {
@@ -2058,18 +2509,16 @@ function EmailReaderModal({
           </div>
         )}
 
-        {/* Content Format Toggle Tabs */}
+        {/* Content Format Toggle Tabs (Always showing HTML & Text options) */}
         <div className="modal-view-tabs">
-          {email.htmlBody && (
-            <button
-              className={`view-tab-btn ${viewTab === 'html' ? 'active' : ''}`}
-              type="button"
-              onClick={() => setViewTab('html')}
-            >
-              <Sparkles size={13} />
-              <span>富文本视图 (HTML)</span>
-            </button>
-          )}
+          <button
+            className={`view-tab-btn ${viewTab === 'html' ? 'active' : ''}`}
+            type="button"
+            onClick={() => setViewTab('html')}
+          >
+            <Sparkles size={13} />
+            <span>富文本视图 (HTML)</span>
+          </button>
           <button
             className={`view-tab-btn ${viewTab === 'text' ? 'active' : ''}`}
             type="button"
@@ -2082,10 +2531,10 @@ function EmailReaderModal({
 
         {/* Mail Content Viewer Area */}
         <div className="modal-content-viewport">
-          {viewTab === 'html' && email.htmlBody ? (
+          {viewTab === 'html' ? (
             <iframe
               className="email-html-iframe"
-              srcDoc={email.htmlBody}
+              srcDoc={htmlContentToRender}
               title="Email HTML Body"
               sandbox="allow-popups allow-popups-to-escape-sandbox"
             />
