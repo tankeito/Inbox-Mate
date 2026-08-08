@@ -211,18 +211,30 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
     const primaryCode = matches.sort((left, right) => right.score - left.score || Date.parse(right.receivedAt) - Date.parse(left.receivedAt))[0];
     return { messages: emailItems, primaryCode };
   } catch (error) {
-    if (error instanceof InboxMateError) throw error;
-    const classified = classifyImapError(error, options.signal.aborted);
+    const classified = error instanceof InboxMateError ? error.code : classifyImapError(error, options.signal.aborted);
+
     if (
-      classified === 'AUTH_FAILED' &&
-      (account.provider === 'mailcom' || account.email.endsWith('cheerful.com') || account.email.endsWith('mail.com'))
+      (account.provider === 'mailcom' || account.email.endsWith('cheerful.com') || account.email.endsWith('mail.com')) &&
+      (classified === 'AUTH_FAILED' || classified === 'TIMEOUT' || classified === 'CONNECTION_FAILED')
     ) {
-      throw new InboxMateError(
-        'MAILCOM_IMAP_DISABLED',
-        401,
-        'Mail.com 账号认证失败：未在网页端开启【POP3 & IMAP Access】选项。'
-      );
+      try {
+        const pop3Account: AccountInput = {
+          ...account,
+          customHost: account.customHost || 'pop.mail.com',
+          customPort: account.customPort || 995,
+          customProtocol: 'pop3'
+        };
+        return await fetchAccountVerificationCodeViaPop3(pop3Account, options);
+      } catch {
+        throw new InboxMateError(
+          'MAILCOM_IMAP_DISABLED',
+          401,
+          'Mail.com 账号认证失败：未在网页端开启【POP3 & IMAP Access】选项，或应用密码不正确。'
+        );
+      }
     }
+
+    if (error instanceof InboxMateError) throw error;
     throw new InboxMateError(classified);
   } finally {
     options.signal.removeEventListener('abort', closeOnAbort);

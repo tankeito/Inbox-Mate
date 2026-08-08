@@ -348,8 +348,8 @@ function getErrorTag(code?: string): { label: string; tip: string } {
   switch (code) {
     case 'MAILCOM_IMAP_DISABLED':
       return {
-        label: 'Mail.com 协议未开启',
-        tip: '💡 提示：Mail.com 新账号网页端默认未开启 IMAP/POP3 开关。请登录 Mail.com ➔ 【Account Settings】 ➔ 【Security Options】 勾选开启 【POP3 & IMAP options】 后重试。'
+        label: 'Mail.com 需 Premium 或开通协议',
+        tip: '💡 提示：Mail.com 官方规定免费账号默认限制第三方客户端 IMAP/POP3 访问（即便生成应用密码也会抛出 Authentication Failed）。请登录 Mail.com 网页端 ➔ 点击顶栏【Email】 ➔ 侧边栏【Settings】 ➔ 【POP3 & IMAP】 勾选【Enable access via POP3 & IMAP】或升级 Premium 账号后重试。'
       };
     case 'AUTH_FAILED':
     case 'AUTH_REQUIRED':

@@ -1206,7 +1206,7 @@ input:focus, select:focus {
 
 .feed-scroll-container.view-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
   grid-auto-rows: 238px;
   gap: 12px;
   align-content: start;
@@ -2217,7 +2217,8 @@ input:focus, select:focus {
 
 .group-emails-wrapper.view-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
+  grid-auto-rows: 238px;
   gap: 12px;
 }
 
