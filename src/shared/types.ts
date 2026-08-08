@@ -1,4 +1,19 @@
-export const PROVIDER_IDS = ['microsoft', 'gmx', 'rambler', 'mailru'] as const;
+export const PROVIDER_IDS = [
+  'microsoft',
+  'gmx',
+  'rambler',
+  'mailru',
+  'mailcom',
+  'yahoo',
+  'gmail',
+  'netease163',
+  'qq',
+  'icloud',
+  'zoho',
+  'fastmail',
+  'aol',
+  'custom'
+] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type JobState = 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
@@ -19,6 +34,7 @@ export type SafeErrorCode =
   | 'AUTH_DENIED'
   | 'AUTH_EXPIRED'
   | 'AUTH_FAILED'
+  | 'MAILCOM_IMAP_DISABLED'
   | 'CONNECTION_FAILED'
   | 'TIMEOUT'
   | 'RATE_LIMITED'
@@ -49,6 +65,10 @@ export interface AccountInput {
   email: string;
   provider: ProviderId;
   auth: AccountAuthInput;
+  customHost?: string;
+  customPort?: number;
+  customProtocol?: 'imap' | 'pop3';
+  customSecure?: boolean;
 }
 
 export interface CreateJobInput {
@@ -90,6 +110,9 @@ export interface AccountSnapshot {
   email: string;
   provider: ProviderId;
   state: AccountState;
+  customHost?: string;
+  customPort?: number;
+  customProtocol?: 'imap' | 'pop3';
   messages?: EmailItem[];
   result?: CodeMatch;
   error?: AccountError;

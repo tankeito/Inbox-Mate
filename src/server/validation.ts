@@ -3,7 +3,22 @@ import { InboxMateError } from './errors.js';
 import { normalizeEmail, providerForEmail } from './providers.js';
 import type { AccountInput, CreateJobInput, ProviderId } from '../shared/types.js';
 
-const providerSchema = z.enum(['microsoft', 'gmx', 'rambler', 'mailru']);
+const providerSchema = z.enum([
+  'microsoft',
+  'gmx',
+  'rambler',
+  'mailru',
+  'mailcom',
+  'yahoo',
+  'gmail',
+  'netease163',
+  'qq',
+  'icloud',
+  'zoho',
+  'fastmail',
+  'aol',
+  'custom'
+]);
 const clientAccountIdSchema = z.string().min(1).max(128);
 
 const accountSchema = z
@@ -11,6 +26,10 @@ const accountSchema = z
     clientAccountId: clientAccountIdSchema,
     email: z.string().trim().email().max(320),
     provider: providerSchema.optional(),
+    customHost: z.string().max(256).optional(),
+    customPort: z.number().int().min(1).max(65535).optional(),
+    customProtocol: z.enum(['imap', 'pop3']).optional(),
+    customSecure: z.boolean().optional(),
     auth: z.union([
       z.object({ type: z.literal('app_password'), secret: z.string().min(1).max(1024) }),
       z.object({ type: z.literal('oauth_session'), sessionId: z.string().min(1).max(256) }),
@@ -44,12 +63,9 @@ export function parseCreateJobInput(body: unknown): CreateJobInput {
     seen.add(email);
 
     const profile = providerForEmail(email);
-    if (!profile) {
-      throw new InboxMateError('UNSUPPORTED_PROVIDER', 400, `不支持的邮箱域名: ${email}`);
-    }
 
-    // Auto-correct provider to match email domain
-    const providerId = profile.id;
+    // Auto-correct provider to match email domain unless custom is explicitly requested
+    const providerId = account.provider === 'custom' ? 'custom' : profile.id;
 
     if (account.auth.type === 'refresh_token') {
       // Refresh token auth is valid for Graph API / OAuth providers

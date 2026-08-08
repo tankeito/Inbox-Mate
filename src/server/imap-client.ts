@@ -4,6 +4,7 @@ import type { AccountInput, CodeMatch, EmailItem } from '../shared/types.js';
 import { extractVerificationCode } from '../shared/verification-code.js';
 import { InboxMateError, classifyImapError } from './errors.js';
 import { PROVIDER_REGISTRY } from './providers.js';
+import { fetchAccountVerificationCodeViaPop3 } from './pop3-client.js';
 
 const MAX_MESSAGE_BYTES = 1024 * 1024;
 const MAX_TEXT_PART_BYTES = 256 * 1024;
@@ -58,8 +59,6 @@ interface DecodedPart {
 }
 
 async function decodeTextPart(content: Buffer, contentType: string): Promise<DecodedPart> {
-  // The IMAP download stream has already handled transfer encoding and charset.
-  // MailParser safely converts the supplied plain or HTML fragment into text and HTML.
   const source = Buffer.concat([
     Buffer.from(`Content-Type: ${contentType}; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n`, 'utf8'),
     content
@@ -97,11 +96,20 @@ export interface FetchAccountResult {
 }
 
 export async function fetchAccountVerificationCode(account: AccountInput, options: FetchAccountOptions): Promise<FetchAccountResult> {
+  if (account.customProtocol === 'pop3') {
+    return fetchAccountVerificationCodeViaPop3(account, options);
+  }
+
   if (account.auth.type === 'refresh_token') {
     return fetchAccountVerificationCodeViaGraph(account, options);
   }
 
   const provider = PROVIDER_REGISTRY[account.provider];
+  const host = account.customHost || provider?.host || `imap.${account.email.split('@')[1]}`;
+  const port = account.customPort || provider?.port || 993;
+  const isCustomHost = account.provider === 'custom' || Boolean(account.customHost);
+  const connectionTimeout = isCustomHost ? 3000 : 10_000;
+
   let client: ImapFlow | undefined;
   let lock: Awaited<ReturnType<ImapFlow['getMailboxLock']>> | undefined;
   const closeOnAbort = (): void => client?.close();
@@ -113,15 +121,15 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
     if (options.signal.aborted) throw new InboxMateError('CANCELLED');
 
     client = new ImapFlow({
-      host: provider.host,
-      port: provider.port,
+      host,
+      port,
       secure: true,
-      servername: provider.host,
+      servername: host,
       auth,
       disableAutoIdle: true,
-      connectionTimeout: 10_000,
-      greetingTimeout: 10_000,
-      socketTimeout: 15_000,
+      connectionTimeout,
+      greetingTimeout: connectionTimeout,
+      socketTimeout: connectionTimeout + 5000,
       logger: false
     });
 
@@ -129,7 +137,7 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
     await client.connect();
     if (options.signal.aborted) throw new InboxMateError('CANCELLED');
 
-    lock = await client.getMailboxLock('INBOX', { readOnly: true, acquireTimeout: 10_000 });
+    lock = await client.getMailboxLock('INBOX', { readOnly: true, acquireTimeout: connectionTimeout });
     options.onProgress('searching');
     const threshold = options.lookbackMinutes > 0 ? new Date(Date.now() - options.lookbackMinutes * 60_000) : undefined;
     const searched = threshold
@@ -204,7 +212,18 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
     return { messages: emailItems, primaryCode };
   } catch (error) {
     if (error instanceof InboxMateError) throw error;
-    throw new InboxMateError(classifyImapError(error, options.signal.aborted));
+    const classified = classifyImapError(error, options.signal.aborted);
+    if (
+      classified === 'AUTH_FAILED' &&
+      (account.provider === 'mailcom' || account.email.endsWith('cheerful.com') || account.email.endsWith('mail.com'))
+    ) {
+      throw new InboxMateError(
+        'MAILCOM_IMAP_DISABLED',
+        401,
+        'Mail.com 账号认证失败：未在网页端开启【POP3 & IMAP Access】选项。'
+      );
+    }
+    throw new InboxMateError(classified);
   } finally {
     options.signal.removeEventListener('abort', closeOnAbort);
     try {

@@ -12,6 +12,9 @@ export interface ParsedAccount {
   clientId?: string;
   provider: ProviderId;
   lineNumber: number;
+  customHost?: string;
+  customPort?: number;
+  customProtocol?: 'imap' | 'pop3';
 }
 
 export interface InvalidAccountLine {
@@ -61,7 +64,7 @@ export function parseAccountLineSmart(
   lineNumber = 1,
   mode: ParseMode = 'auto',
   customDelimiter?: string
-): (SmartParsedAccount & { isUnsupported?: boolean }) | null {
+): SmartParsedAccount | null {
   const rawTrimmed = rawLine.trim();
   if (!rawTrimmed || rawTrimmed.startsWith('#')) return null;
 
@@ -80,22 +83,15 @@ export function parseAccountLineSmart(
         ).trim();
         const clientId = String(obj.clientId || obj.client_id || obj.clientid || obj['客户端ID'] || '').trim() || undefined;
         const refreshToken = String(obj.refreshToken || obj.refresh_token || obj.token || obj['刷新令牌'] || '').trim() || undefined;
+        const customHost = String(obj.host || obj.imapHost || obj.popHost || obj.server || obj['服务器'] || '').trim() || undefined;
+        const rawPort = obj.port || obj.imapPort || obj.popPort || obj['端口'];
+        const customPort = rawPort ? Number(rawPort) : undefined;
+        const rawProto = String(obj.protocol || obj.proto || obj['协议'] || '').trim().toLowerCase();
+        const customProtocol: 'imap' | 'pop3' | undefined = rawProto.includes('pop') ? 'pop3' : rawProto.includes('imap') ? 'imap' : undefined;
 
         const normEmail = normalizeEmail(email);
         if (/^\S+@\S+\.\S+$/.test(normEmail)) {
           const provider = providerForEmail(normEmail);
-          if (!provider) {
-            return {
-              email: normEmail,
-              secret,
-              provider: 'gmx',
-              lineNumber,
-              confidence: 'low',
-              detectedFormat: 'json_query',
-              rawLine,
-              isUnsupported: true,
-            };
-          }
           return {
             email: normEmail,
             secret,
@@ -103,6 +99,9 @@ export function parseAccountLineSmart(
             refreshToken,
             provider: provider.id,
             lineNumber,
+            customHost,
+            customPort,
+            customProtocol,
             confidence: secret || refreshToken ? 'high' : 'medium',
             detectedFormat: 'json_query',
             rawLine,
@@ -123,22 +122,15 @@ export function parseAccountLineSmart(
       const secret = (params.get('password') || params.get('pass') || params.get('pwd') || params.get('secret') || '').trim();
       const clientId = (params.get('client_id') || params.get('clientId') || '').trim() || undefined;
       const refreshToken = (params.get('refresh_token') || params.get('refreshToken') || '').trim() || undefined;
+      const customHost = (params.get('host') || params.get('server') || '').trim() || undefined;
+      const rawPort = params.get('port');
+      const customPort = rawPort ? Number(rawPort) : undefined;
+      const rawProto = (params.get('protocol') || '').trim().toLowerCase();
+      const customProtocol: 'imap' | 'pop3' | undefined = rawProto.includes('pop') ? 'pop3' : rawProto.includes('imap') ? 'imap' : undefined;
 
       const normEmail = normalizeEmail(email);
       if (/^\S+@\S+\.\S+$/.test(normEmail)) {
         const provider = providerForEmail(normEmail);
-        if (!provider) {
-          return {
-            email: normEmail,
-            secret,
-            provider: 'gmx',
-            lineNumber,
-            confidence: 'low',
-            detectedFormat: 'json_query',
-            rawLine,
-            isUnsupported: true,
-          };
-        }
         return {
           email: normEmail,
           secret,
@@ -146,6 +138,9 @@ export function parseAccountLineSmart(
           refreshToken,
           provider: provider.id,
           lineNumber,
+          customHost,
+          customPort,
+          customProtocol,
           confidence: 'high',
           detectedFormat: 'json_query',
           rawLine,
@@ -179,18 +174,17 @@ export function parseAccountLineSmart(
         const tokenMatch = normalized.match(/(?:刷新令牌|refresh_token|refreshToken|token)\s*[:=]\s*(\S+)/i);
         if (tokenMatch) refreshToken = tokenMatch[1].trim().replace(/[\]\}]$/, '');
 
-        if (!provider) {
-          return {
-            email: normEmail,
-            secret,
-            provider: 'gmx',
-            lineNumber,
-            confidence: 'low',
-            detectedFormat: 'kv_bracket',
-            rawLine,
-            isUnsupported: true,
-          };
-        }
+        let customHost: string | undefined = undefined;
+        const hostMatch = normalized.match(/(?:服务器|host|server)\s*[:=]\s*([^\s\|;,\]}]+)/i);
+        if (hostMatch) customHost = hostMatch[1].trim();
+
+        let customPort: number | undefined = undefined;
+        const portMatch = normalized.match(/(?:端口|port)\s*[:=]\s*(\d+)/i);
+        if (portMatch) customPort = Number(portMatch[1]);
+
+        let customProtocol: 'imap' | 'pop3' | undefined = undefined;
+        const protoMatch = normalized.match(/(?:协议|protocol)\s*[:=]\s*(imap|pop3|pop)/i);
+        if (protoMatch) customProtocol = protoMatch[1].toLowerCase().includes('pop') ? 'pop3' : 'imap';
 
         const confidence: ParseConfidence = secret || refreshToken ? 'high' : provider.id === 'microsoft' ? 'medium' : 'low';
         return {
@@ -200,6 +194,9 @@ export function parseAccountLineSmart(
           refreshToken,
           provider: provider.id,
           lineNumber,
+          customHost,
+          customPort,
+          customProtocol,
           confidence,
           detectedFormat: 'kv_bracket',
           rawLine,
@@ -208,14 +205,13 @@ export function parseAccountLineSmart(
     }
   }
 
-  // 4. Delimiter Mode with Email Anchor & Two-End Shrink Strategy
+  // 4. Delimiter Mode with Email Anchor & Two-End Shrink Strategy (两端收缩匹配策略)
   if (mode === 'auto' || mode === 'four_parts' || mode === 'custom') {
     const rawMatches = Array.from(normalized.matchAll(CANDIDATE_EMAIL_REGEX));
     if (rawMatches.length > 0) {
       let chosenEmail = '';
-      let chosenProvider: ReturnType<typeof providerForEmail> = undefined;
+      let chosenProvider: ReturnType<typeof providerForEmail> = providerForEmail('user@custom.com');
       let emailMatchObj = rawMatches[0];
-      let isUnsupportedDomain = false;
 
       for (const m of rawMatches) {
         const cleaned = m[0].replace(/^[^a-zA-Z0-9]+/, '');
@@ -233,7 +229,6 @@ export function parseAccountLineSmart(
         const cleaned = rawMatches[0][0].replace(/^[^a-zA-Z0-9]+/, '');
         chosenEmail = normalizeEmail(cleaned);
         chosenProvider = providerForEmail(chosenEmail);
-        if (!chosenProvider) isUnsupportedDomain = true;
       }
 
       if (chosenEmail) {
@@ -242,20 +237,7 @@ export function parseAccountLineSmart(
         const emailIndex = (emailMatchObj.index ?? 0) + (rawMatchedText.length - cleanedText.length);
         const emailLen = cleanedText.length;
 
-        if (isUnsupportedDomain || !chosenProvider) {
-          return {
-            email: chosenEmail,
-            secret: '',
-            provider: 'gmx',
-            lineNumber,
-            confidence: 'low',
-            detectedFormat: 'delimiter',
-            rawLine,
-            isUnsupported: true,
-          };
-        }
-
-        // Strip noise to the left of Email (Edge Case 1)
+        // Strip noise to the left of Email (Left Anchor)
         const rightPart = normalized.slice(emailIndex + emailLen).trim();
 
         let activeDelimiters = ['----', '---', '--', '\t', '|', ':', ',', ';'];
@@ -306,25 +288,38 @@ export function parseAccountLineSmart(
 
         let clientId: string | undefined = undefined;
         let refreshToken: string | undefined = undefined;
-        const unassigned: string[] = [];
+        let customHost: string | undefined = undefined;
+        let customPort: number | undefined = undefined;
+        let customProtocol: 'imap' | 'pop3' | undefined = undefined;
 
-        // Two-End Shrink Strategy (Edge Case 2)
-        for (const seg of segments) {
+        // Two-End Shrink Strategy (Right-side shrink for server/port/protocol/UUID/token)
+        const remainingSegments: string[] = [];
+
+        for (let i = 0; i < segments.length; i++) {
+          const seg = segments[i];
+          const segLower = seg.toLowerCase();
+
           if (!clientId && UUID_REGEX.test(seg)) {
             clientId = seg;
           } else if (!refreshToken && (seg.startsWith('M.C') || seg.length > 80)) {
             refreshToken = seg;
+          } else if (!customProtocol && (segLower === 'pop3' || segLower === 'pop' || segLower === 'imap')) {
+            customProtocol = segLower.includes('pop') ? 'pop3' : 'imap';
+          } else if (!customPort && /^(993|995|110|143|25|465|587)$/.test(seg)) {
+            customPort = parseInt(seg, 10);
+          } else if (!customHost && /^(?:imap|pop|mail|smtp)[a-z0-9.-]+\.[a-z]{2,}$/i.test(seg)) {
+            customHost = seg;
           } else {
-            unassigned.push(seg);
+            remainingSegments.push(seg);
           }
         }
 
-        const secret = unassigned.join(usedDelimiter ?? '');
+        const secret = remainingSegments.join(usedDelimiter ?? '');
 
         let confidence: ParseConfidence = 'high';
         if (!secret && !refreshToken && chosenProvider.id !== 'microsoft') {
           confidence = 'low';
-        } else if (unassigned.length > 2) {
+        } else if (remainingSegments.length > 2) {
           confidence = 'medium';
         }
 
@@ -335,6 +330,9 @@ export function parseAccountLineSmart(
           refreshToken,
           provider: chosenProvider.id,
           lineNumber,
+          customHost,
+          customPort,
+          customProtocol,
           confidence,
           detectedFormat: 'delimiter',
           rawLine,
@@ -378,11 +376,6 @@ export function parseAccountTextSmart(
       return;
     }
 
-    if (parsed.isUnsupported) {
-      invalid.push({ lineNumber, reason: 'unsupported_provider' });
-      return;
-    }
-
     if (seen.has(parsed.email)) {
       invalid.push({ lineNumber, reason: 'duplicate' });
       return;
@@ -413,7 +406,6 @@ export function parseAccountTextSmart(
   };
 }
 
-
 export function parseAccountText(input: string, maxAccounts = 10): ParseAccountTextResult {
   const smartResult = parseAccountTextSmart(input, maxAccounts, 'auto');
   return {
@@ -422,6 +414,9 @@ export function parseAccountText(input: string, maxAccounts = 10): ParseAccountT
       secret: a.secret,
       provider: a.provider,
       lineNumber: a.lineNumber,
+      customHost: a.customHost,
+      customPort: a.customPort,
+      customProtocol: a.customProtocol,
     })),
     invalid: smartResult.invalid,
   };

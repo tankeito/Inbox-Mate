@@ -41,7 +41,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { parseAccountTextSmart, parseAccountLineSmart, type ParseMode, type SmartParsedAccount } from '../shared/account-parser.js';
 
-type Provider = 'gmx' | 'rambler' | 'microsoft' | 'mailru';
+type Provider =
+  | 'microsoft'
+  | 'gmx'
+  | 'rambler'
+  | 'mailru'
+  | 'mailcom'
+  | 'yahoo'
+  | 'gmail'
+  | 'netease163'
+  | 'qq'
+  | 'icloud'
+  | 'zoho'
+  | 'fastmail'
+  | 'aol'
+  | 'custom';
+
 type CredentialType = 'appPassword' | 'oauth2';
 type HealthState = 'checking' | 'ready' | 'offline';
 type OauthState = 'not_started' | 'authorizing' | 'authorized' | 'denied' | 'expired' | 'consumed';
@@ -90,6 +105,9 @@ interface Account {
   oauthState?: OauthState;
   refreshToken?: string;
   clientId?: string;
+  customHost?: string;
+  customPort?: number;
+  customProtocol?: 'imap' | 'pop3';
   status: AccountStatus;
   errorCode?: string;
   errorMessage?: string;
@@ -103,6 +121,9 @@ interface AccountDraft {
   secret: string;
   refreshToken?: string;
   clientId?: string;
+  customHost?: string;
+  customPort?: number;
+  customProtocol?: 'imap' | 'pop3';
 }
 
 interface ToastState {
@@ -116,6 +137,9 @@ interface ApiAccountSnapshot {
   email?: string;
   provider?: Provider;
   state?: string;
+  customHost?: string;
+  customPort?: number;
+  customProtocol?: 'imap' | 'pop3';
   messages?: EmailItem[];
   result?: unknown;
   error?: { code?: unknown; message?: unknown };
@@ -134,6 +158,16 @@ const providerDetails: Record<Provider, { label: string; domain: string; authLab
   gmx: { label: 'GMX 邮箱', domain: 'GMX', authLabel: '密码', badgeColor: '#3b82f6' },
   rambler: { label: 'Rambler', domain: 'Rambler 邮箱', authLabel: '密码', badgeColor: '#8b5cf6' },
   mailru: { label: 'Mail.ru', domain: 'Mail.ru 邮箱', authLabel: '密码', badgeColor: '#005ff9' },
+  mailcom: { label: 'Mail.com', domain: 'Mail.com / Cheerful', authLabel: '密码', badgeColor: '#10b981' },
+  yahoo: { label: 'Yahoo', domain: 'Yahoo / Ymail', authLabel: '应用专用密码', badgeColor: '#6366f1' },
+  gmail: { label: 'Gmail', domain: 'Google Mail', authLabel: '应用专用密码', badgeColor: '#ef4444' },
+  netease163: { label: '网易邮箱', domain: '163 / 126 / Yeah', authLabel: '授权码 / 密码', badgeColor: '#dc2626' },
+  qq: { label: 'QQ 邮箱', domain: 'QQ / Foxmail', authLabel: '授权码 / 密码', badgeColor: '#0284c7' },
+  icloud: { label: 'iCloud', domain: 'iCloud / Me.com', authLabel: '应用专用密码', badgeColor: '#64748b' },
+  zoho: { label: 'Zoho Mail', domain: 'Zoho Mail', authLabel: '密码', badgeColor: '#d97706' },
+  fastmail: { label: 'Fastmail', domain: 'Fastmail', authLabel: '应用专用密码', badgeColor: '#059669' },
+  aol: { label: 'AOL Mail', domain: 'AOL Mail', authLabel: '应用专用密码', badgeColor: '#ec4899' },
+  custom: { label: '自定义邮箱', domain: 'IMAP / POP3', authLabel: '密码', badgeColor: '#84cc16' },
 };
 
 const providerDomains: Record<Provider, readonly string[]> = {
@@ -152,6 +186,30 @@ const providerDomains: Record<Provider, readonly string[]> = {
   gmx: ['gmx.com', 'gmx.net', 'gmx.de', 'gmx.at', 'gmx.ch', 'gmx.fr', 'gmx.co.uk', 'gmx.us', 'gmx.info'],
   rambler: ['rambler.ru', 'myrambler.ru', 'ro.ru', 'lenta.ru', 'autorambler.ru'],
   mailru: ['mail.ru', 'inbox.ru', 'list.ru', 'bk.ru', 'internet.ru'],
+  mailcom: [
+    'mail.com',
+    'cheerful.com',
+    'email.com',
+    'usa.com',
+    'myself.com',
+    'post.com',
+    'consultant.com',
+    'dr.com',
+    'engineer.com',
+    'techie.com',
+    'writeme.com',
+    'catlover.com',
+    'doglover.com',
+  ],
+  yahoo: ['yahoo.com', 'yahoo.co.uk', 'yahoo.de', 'yahoo.fr', 'myyahoo.com', 'ymail.com'],
+  gmail: ['gmail.com', 'googlemail.com'],
+  netease163: ['163.com', '126.com', 'yeah.net'],
+  qq: ['qq.com', 'foxmail.com'],
+  icloud: ['icloud.com', 'me.com', 'mac.com'],
+  zoho: ['zoho.com', 'zohomail.com'],
+  fastmail: ['fastmail.com', 'fastmail.fm'],
+  aol: ['aol.com'],
+  custom: [],
 };
 
 const statusDetails: Record<
@@ -182,9 +240,10 @@ const createId = () =>
 const isEmail = (value: string) => /^\S+@\S+\.\S+$/.test(value.trim());
 const accountKey = (email: string) => email.trim().toLowerCase();
 
-const providerForEmail = (email: string): Provider | undefined => {
+const providerForEmail = (email: string): Provider => {
   const domain = email.trim().toLowerCase().split('@')[1] ?? '';
-  return (Object.keys(providerDomains) as Provider[]).find((provider) => providerDomains[provider].includes(domain));
+  const found = (Object.keys(providerDomains) as Provider[]).find((provider) => providerDomains[provider].includes(domain));
+  return found || 'custom';
 };
 
 const credentialForProvider = (provider: Provider): CredentialType =>
@@ -192,7 +251,7 @@ const credentialForProvider = (provider: Provider): CredentialType =>
 
 function parseAccountLine(
   line: string,
-): { email: string; secret?: string; refreshToken?: string; clientId?: string } | null {
+): { email: string; secret?: string; refreshToken?: string; clientId?: string; customHost?: string; customPort?: number; customProtocol?: 'imap' | 'pop3' } | null {
   const parsed = parseAccountLineSmart(line);
   if (!parsed) return null;
   return {
@@ -200,29 +259,35 @@ function parseAccountLine(
     secret: parsed.secret || undefined,
     refreshToken: parsed.refreshToken,
     clientId: parsed.clientId,
+    customHost: parsed.customHost,
+    customPort: parsed.customPort,
+    customProtocol: parsed.customProtocol,
   };
 }
 
 function parseSingleAccountInput(
   raw: string,
-): { email: string; provider: Provider; secret: string; refreshToken?: string; clientId?: string } | null {
+): { email: string; provider: Provider; secret: string; refreshToken?: string; clientId?: string; customHost?: string; customPort?: number; customProtocol?: 'imap' | 'pop3' } | null {
   const line = raw.trim();
   if (!line) return null;
-  const parsed = parseAccountLine(line);
+  const parsed = parseAccountLineSmart(line);
   if (!parsed || !isEmail(parsed.email)) {
     if (isEmail(line)) {
-      const provider = providerForEmail(line) ?? 'gmx';
+      const provider = providerForEmail(line);
       return { email: line, provider, secret: '' };
     }
     return null;
   }
-  const provider = providerForEmail(parsed.email) ?? 'gmx';
+  const provider = providerForEmail(parsed.email);
   return {
     email: parsed.email,
     provider,
     secret: parsed.secret ?? '',
     refreshToken: parsed.refreshToken,
     clientId: parsed.clientId,
+    customHost: parsed.customHost,
+    customPort: parsed.customPort,
+    customProtocol: parsed.customProtocol,
   };
 }
 
@@ -281,6 +346,11 @@ function timestampLabel(value?: string): string {
 
 function getErrorTag(code?: string): { label: string; tip: string } {
   switch (code) {
+    case 'MAILCOM_IMAP_DISABLED':
+      return {
+        label: 'Mail.com 协议未开启',
+        tip: '💡 提示：Mail.com 新账号网页端默认未开启 IMAP/POP3 开关。请登录 Mail.com ➔ 【Account Settings】 ➔ 【Security Options】 勾选开启 【POP3 & IMAP options】 后重试。'
+      };
     case 'AUTH_FAILED':
     case 'AUTH_REQUIRED':
       return { label: '密码错误', tip: '应用专用密码无效或未开启 IMAP 服务' };
@@ -638,6 +708,9 @@ export function App() {
         secret,
         refreshToken,
         clientId: acc.clientId,
+        customHost: acc.customHost,
+        customPort: acc.customPort,
+        customProtocol: acc.customProtocol,
         oauthState: provider === 'microsoft' ? (refreshToken ? 'authorized' : 'not_started') : undefined,
         status: 'draft',
       });
@@ -653,8 +726,7 @@ export function App() {
     setFieldOverrides({});
     setFilterOnlyLowConfidence(false);
 
-    // Auto-switch Accordion: collapse Import section, expand Queue section!
-    setIsImportSectionCollapsed(true);
+    // Keep Queue section open
     setIsQueueSectionCollapsed(false);
 
     if (microsoftCount > 0) {
@@ -696,6 +768,9 @@ export function App() {
         provider: parsed.provider,
         credentialType: credentialForProvider(parsed.provider),
         secret: parsed.provider === 'microsoft' ? (parsed.secret || '') : parsed.secret,
+        customHost: parsed.customHost,
+        customPort: parsed.customPort,
+        customProtocol: parsed.customProtocol,
         oauthState: parsed.provider === 'microsoft' ? 'not_started' : undefined,
         status: 'draft',
       },
@@ -703,8 +778,7 @@ export function App() {
     setSingleRawInput('');
     setDraft(defaultDraft);
 
-    // Auto-switch Accordion: collapse Import section, expand Queue section!
-    setIsImportSectionCollapsed(true);
+    // Keep Queue section open
     setIsQueueSectionCollapsed(false);
 
     notify('success', `已添加 ${parsed.email}`);
@@ -962,6 +1036,9 @@ export function App() {
             clientAccountId: account.id,
             email: account.email.trim(),
             provider: account.provider,
+            customHost: account.customHost,
+            customPort: account.customPort,
+            customProtocol: account.customProtocol,
             auth:
               account.refreshToken
                 ? { type: 'refresh_token', refreshToken: account.refreshToken, clientId: account.clientId }

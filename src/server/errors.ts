@@ -7,6 +7,7 @@ const ERROR_MESSAGES: Record<SafeErrorCode, string> = {
   AUTH_DENIED: '邮箱授权被拒绝或已取消。',
   AUTH_EXPIRED: '邮箱授权已过期，请重新授权。',
   AUTH_FAILED: '邮箱认证失败。请检查应用密码或重新授权。',
+  MAILCOM_IMAP_DISABLED: 'Mail.com 账号认证失败：未在网页端开启【POP3 & IMAP Access】选项。',
   CONNECTION_FAILED: '无法连接到邮箱服务器。',
   TIMEOUT: '连接邮箱超时，请稍后重试。',
   RATE_LIMITED: '当前任务过多，请等待正在运行的任务结束。',

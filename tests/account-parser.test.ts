@@ -2,20 +2,37 @@ import { describe, expect, it } from 'vitest';
 import { parseAccountText, parseAccountTextSmart, parseAccountLineSmart } from '../src/shared/account-parser';
 
 describe('parseAccountText', () => {
-  it('preserves delimiters that occur inside a password', () => {
-    const parsed = parseAccountText('user@gmx.com:app:password|with,delimiters');
+  it('parses Mail.com subdomain account rozella.hermann@cheerful.com:JZaNPpwbGHnt', () => {
+    const parsed = parseAccountText('rozella.hermann@cheerful.com:JZaNPpwbGHnt');
     expect(parsed.accounts).toHaveLength(1);
     expect(parsed.accounts[0]).toMatchObject({
-      email: 'user@gmx.com',
-      secret: 'app:password|with,delimiters',
-      provider: 'gmx'
+      email: 'rozella.hermann@cheerful.com',
+      secret: 'JZaNPpwbGHnt',
+      provider: 'mailcom'
     });
   });
 
-  it('uses exact provider domains and rejects lookalikes', () => {
-    const parsed = parseAccountText('user@gmx.evil.com----secret\nuser@notoutlook.com----secret');
-    expect(parsed.accounts).toHaveLength(0);
-    expect(parsed.invalid.map((item) => item.reason)).toEqual(['unsupported_provider', 'unsupported_provider']);
+  it('preserves delimiters inside a password and extracts custom server parameters (Two-End Shrink Strategy)', () => {
+    const parsed = parseAccountLineSmart('user@mycompany.com:p:a:s:s:word:imap.mycompany.com:993:pop3');
+    expect(parsed).not.toBeNull();
+    expect(parsed).toMatchObject({
+      email: 'user@mycompany.com',
+      secret: 'p:a:s:s:word',
+      customHost: 'imap.mycompany.com',
+      customPort: 993,
+      customProtocol: 'pop3',
+      provider: 'custom'
+    });
+  });
+
+  it('accepts unknown email domains as custom provider instead of rejecting them', () => {
+    const parsed = parseAccountText('user@customdomain.com----secret123');
+    expect(parsed.accounts).toHaveLength(1);
+    expect(parsed.accounts[0]).toMatchObject({
+      email: 'user@customdomain.com',
+      secret: 'secret123',
+      provider: 'custom'
+    });
   });
 
   it('deduplicates case-insensitively', () => {
@@ -73,14 +90,15 @@ describe('parseAccountText', () => {
     });
   });
 
-  it('parses JSON format line', () => {
-    const line = '{"email": "user@rambler.ru", "password": "mypassword123"}';
+  it('parses JSON format line with custom host/port', () => {
+    const line = '{"email": "user@custom.com", "password": "mypassword123", "imapHost": "imap.custom.com", "imapPort": 993}';
     const parsed = parseAccountLineSmart(line);
     expect(parsed).not.toBeNull();
     expect(parsed).toMatchObject({
-      email: 'user@rambler.ru',
+      email: 'user@custom.com',
       secret: 'mypassword123',
-      provider: 'rambler',
+      customHost: 'imap.custom.com',
+      customPort: 993,
       detectedFormat: 'json_query',
     });
   });

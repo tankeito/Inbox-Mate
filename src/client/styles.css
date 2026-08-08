@@ -346,7 +346,7 @@ html, body {
 .workspace {
   display: flex;
   flex: 1;
-  height: calc(100vh - 54px);
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -1207,6 +1207,7 @@ input:focus, select:focus {
 .feed-scroll-container.view-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-auto-rows: 238px;
   gap: 12px;
   align-content: start;
 }
@@ -1391,11 +1392,11 @@ input:focus, select:focus {
   flex-direction: column;
   gap: 8px;
   transition: all 0.2s;
-  content-visibility: auto;
-  contain-intrinsic-size: 0 160px;
   min-width: 0;
   max-width: 100%;
-  overflow-x: hidden;
+  height: 238px;
+  min-height: 238px;
+  box-sizing: border-box;
 }
 
 .email-card:hover {
@@ -1467,7 +1468,7 @@ input:focus, select:focus {
   justify-content: space-between;
   padding: 8px 12px;
   background: var(--code-banner-bg);
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  border: 1px solid rgba(16, 185, 129, 0.35);
   border-radius: var(--radius-md);
   min-width: 0;
 }
@@ -1496,11 +1497,16 @@ input:focus, select:focus {
   color: var(--text-secondary);
   line-height: 1.4;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 6;
   -webkit-box-orient: vertical;
   overflow: hidden;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+.email-card.has-code .email-snippet {
+  -webkit-line-clamp: 2;
+  margin-top: 2px;
 }
 
 .email-card-footer {
@@ -1510,6 +1516,7 @@ input:focus, select:focus {
   padding-top: 6px;
   border-top: 1px solid var(--border-subtle);
   min-width: 0;
+  margin-top: auto;
 }
 
 /* Feed Pagination Bar */
@@ -2106,14 +2113,65 @@ input:focus, select:focus {
   gap: 6px;
 }
 
-.group-count-badge {
-  font-size: 10px;
+.provider-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
   font-weight: 600;
-  padding: 1.5px 8px;
+  padding: 2px 8px;
   border-radius: 12px;
-  background: var(--bg-surface);
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--accent-cyan);
+  white-space: nowrap;
+}
+
+.provider-pill.provider-microsoft {
+  background: rgba(14, 165, 233, 0.1);
+  border-color: rgba(14, 165, 233, 0.25);
+  color: var(--accent-cyan);
+}
+
+.provider-pill.provider-gmx {
+  background: rgba(99, 102, 241, 0.1);
+  border-color: rgba(99, 102, 241, 0.25);
+  color: #6366f1;
+}
+
+.provider-pill.provider-rambler {
+  background: rgba(168, 85, 247, 0.1);
+  border-color: rgba(168, 85, 247, 0.25);
+  color: #a855f7;
+}
+
+.provider-pill.provider-mailru {
+  background: rgba(236, 72, 153, 0.1);
+  border-color: rgba(236, 72, 153, 0.25);
+  color: #ec4899;
+}
+
+.provider-pill.provider-mailcom {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.25);
+  color: #059669;
+}
+
+.provider-pill.provider-custom {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.25);
+  color: #d97706;
+}
+
+.group-count-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--bg-surface-elevated);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .group-header-right {
@@ -2302,52 +2360,50 @@ input:focus, select:focus {
   color: var(--text-muted);
 }
 
-/* OTP Code Hero Banner */
+/* OTP Code Hero Banner (Unified with Card verification-code-box) */
 .modal-code-hero {
   margin: 12px 20px 0;
-  padding: 14px 18px;
-  border-radius: var(--radius-lg);
+  padding: 10px 16px;
+  background: var(--code-banner-bg);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.confidence-hero-emerald {
-  background: linear-gradient(135deg, rgba(6, 78, 59, 0.4), rgba(4, 47, 46, 0.4));
-  border: 1px solid rgba(16, 185, 129, 0.5);
-  box-shadow: 0 0 16px rgba(16, 185, 129, 0.15);
-}
-
+.confidence-hero-emerald,
 .confidence-hero-neutral {
-  background: var(--bg-surface-elevated);
-  border: 1px solid var(--border-subtle);
+  background: var(--code-banner-bg);
+  border: 1px solid rgba(16, 185, 129, 0.35);
 }
 
 .code-hero-content {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+  min-width: 0;
 }
 
 .code-hero-badge {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 10.5px;
+  font-weight: 700;
   color: var(--accent-emerald);
 }
 
 .confidence-hero-neutral .code-hero-badge {
-  color: var(--text-muted);
+  color: var(--accent-emerald);
 }
 
 .code-hero-digits {
   font-family: var(--font-mono);
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 800;
-  letter-spacing: 3px;
+  letter-spacing: 0.08em;
   color: var(--text-primary);
 }
 
@@ -2357,18 +2413,24 @@ input:focus, select:focus {
 }
 
 .btn-copy-hero {
-  padding: 8px 16px;
+  padding: 6px 14px;
   background: var(--accent-emerald);
   color: #fff;
-  border-radius: var(--radius-md);
-  font-weight: 600;
-  font-size: 12px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  font-size: 11.5px;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   border: none;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.btn-copy-hero:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
 }
 
 .btn-copy-hero:hover {

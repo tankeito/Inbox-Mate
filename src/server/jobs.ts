@@ -70,12 +70,16 @@ function cloneAccount(account: AccountSnapshot): AccountSnapshot {
 export class JobManager {
   private readonly jobs = new Map<string, JobRuntime>();
   private readonly globalLimit = pLimit(8);
-  private readonly providerLimits: Record<ProviderId, ReturnType<typeof pLimit>> = {
-    microsoft: pLimit(4),
-    gmx: pLimit(4),
-    rambler: pLimit(4),
-    mailru: pLimit(4)
-  };
+  private readonly providerLimits = new Map<string, ReturnType<typeof pLimit>>();
+
+  private getProviderLimit(provider: string): ReturnType<typeof pLimit> {
+    let limit = this.providerLimits.get(provider);
+    if (!limit) {
+      limit = pLimit(4);
+      this.providerLimits.set(provider, limit);
+    }
+    return limit;
+  }
 
   constructor(private readonly runAccount: JobAccountRunner) {}
 
@@ -97,7 +101,10 @@ export class JobManager {
           clientAccountId: account.clientAccountId,
           email: maskEmail(account.email),
           provider: account.provider,
-          state: 'pending'
+          state: 'pending',
+          customHost: account.customHost,
+          customPort: account.customPort,
+          customProtocol: account.customProtocol,
         }
       })),
       controller: new AbortController(),
@@ -147,7 +154,8 @@ export class JobManager {
       await Promise.all(
         job.accounts.map((account) => {
           const provider = account.snapshot.provider;
-          return this.globalLimit(() => this.providerLimits[provider](() => this.executeAccount(job, account, input)));
+          const limit = this.getProviderLimit(provider);
+          return this.globalLimit(() => limit(() => this.executeAccount(job, account, input)));
         })
       );
       if (job.controller.signal.aborted) {

@@ -32,4 +32,15 @@ describe('extractVerificationCode', () => {
       })
     ).toBeUndefined();
   });
+
+  it('rejects false-positive word tokens like 2FLOGIN in status notification emails', () => {
+    expect(
+      extractVerificationCode({
+        subject: 'X two-factor authentication is good to go',
+        text: "You've turned on two-factor authentication for @barbara95968114... 2FLOGIN Save a single-use backup code",
+        receivedAt: '2026-08-07T01:00:00.000Z',
+        from: 'verify@x.com'
+      })
+    ).toBeUndefined();
+  });
 });

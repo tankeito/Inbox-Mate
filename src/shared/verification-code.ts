@@ -13,6 +13,12 @@ const NEGATIVE = /(?:order|invoice|tracking|reference|phone|zip|postal|date|expi
 const URL_NEARBY = /https?:\/\/|www\./i;
 const TOKEN = /(?<![A-Za-z0-9])([A-Za-z0-9]{4,8})(?![A-Za-z0-9])/g;
 
+// Words or phrases that are NOT OTP codes (e.g. 2FLOGIN, 2FACTOR, LOGIN, AUTHENTICATION, GOODTOGO, etc.)
+const NON_CODE_WORDS = /(?:LOGIN|SIGNIN|SIGNUP|AUTH|FACTOR|SECURITY|ACCOUNT|SERVICE|SYSTEM|CANCEL|STATUS|DEVICE|ONLINE|SUPPORT|SETTING|PASSWORD|CONFIRM|MOBILE|NUMBER|REPORT|UPDATE|ACTION|PROMPT|NOTIFY|VERIFY|WELCOME|PLEASE|CHANGE|SUBMIT|SELECT|BUTTON|HEADER|FOOTER|TWITTER|TELEGRAM|GOOGLE|RAMBLER|YAHOO|MICROSOFT|APPLE|XCOM|RIGHTS|RESERVED|GOODTOGO|BACKUP|SINGLEUSE)/i;
+
+// Status notifications that mean 2FA has been turned on/off or account status updated, NOT an OTP email
+const STATUS_NOTICE_SUBJECT = /(?:is good to go|has been turned on|has been enabled|was enabled|has been disabled|was disabled|turned off|successful login|new login|sign-in alert|welcome to|thank you for registering)/i;
+
 function normalizeText(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
@@ -22,6 +28,10 @@ function collectCandidates(text: string, source: Source): Candidate[] {
   for (const match of text.matchAll(TOKEN)) {
     const value = match[1];
     if (!value || !/\d/.test(value)) continue;
+
+    // Filter out invalid non-code word tokens (e.g. 2FLOGIN, 2FACTOR)
+    if (NON_CODE_WORDS.test(value)) continue;
+
     candidates.push({ value: value.toUpperCase(), index: match.index ?? 0, source });
   }
   return candidates;
@@ -37,7 +47,7 @@ function nearestKeywordDistance(text: string, index: number): number | undefined
   return nearest;
 }
 
-function scoreCandidate(candidate: Candidate, text: string): { score: number; reasons: string[] } {
+function scoreCandidate(candidate: Candidate, text: string, isStatusNotice: boolean): { score: number; reasons: string[] } {
   const value = candidate.value;
   const local = text.slice(Math.max(0, candidate.index - 48), candidate.index + value.length + 48);
   const distance = nearestKeywordDistance(text, candidate.index);
@@ -48,7 +58,7 @@ function scoreCandidate(candidate: Candidate, text: string): { score: number; re
     score += 26;
     reasons.push('numeric_code');
   } else if (/^[A-Z0-9]{4,8}$/.test(value) && /[A-Z]/.test(value)) {
-    score += 18;
+    score += 10;
     reasons.push('alphanumeric_code');
   }
   if (value.length === 6 && /^\d+$/.test(value)) {
@@ -64,7 +74,7 @@ function scoreCandidate(candidate: Candidate, text: string): { score: number; re
     reasons.push(candidate.source === 'subject' ? 'subject_keyword' : 'nearby_keyword');
   }
   if (new RegExp(`(?:code|otp|验证码|校验码|安全码)\\s*[:：是为-]?\\s*${value}`, 'i').test(local)) {
-    score += 18;
+    score += 22;
     reasons.push('labelled_value');
   }
 
@@ -83,9 +93,20 @@ function scoreCandidate(candidate: Candidate, text: string): { score: number; re
     reasons.push('date_context');
   }
 
-  // Without explicit OTP keyword, cap the score so random numbers in welcome/notification emails are not misidentified as codes
+  // Status notification penalty (e.g. "X two-factor authentication is good to go")
+  if (isStatusNotice && !reasons.includes('labelled_value')) {
+    score -= 35;
+    reasons.push('status_notice_penalty');
+  }
+
+  // Without explicit OTP keyword, cap the score so random numbers/words are not misidentified
   if (!hasKeyword && candidate.source !== 'subject') {
     score = Math.min(score, 30);
+  }
+
+  // Alphanumeric non-pure-numeric candidates without explicit OTP label must be penalized
+  if (/[A-Z]/.test(value) && !reasons.includes('labelled_value')) {
+    score -= 20;
   }
 
   return { score: Math.max(0, Math.min(100, score)), reasons };
@@ -99,12 +120,14 @@ export function extractVerificationCode(input: {
 }): CodeMatch | undefined {
   const subject = normalizeText(input.subject ?? '');
   const body = normalizeText(input.text ?? '');
+  const isStatusNotice = STATUS_NOTICE_SUBJECT.test(subject);
+
   const candidates = [...collectCandidates(subject, 'subject'), ...collectCandidates(body, 'body')];
   const byValue = new Map<string, { candidate: Candidate; score: number; reasons: string[] }>();
 
   for (const candidate of candidates) {
     const text = candidate.source === 'subject' ? subject : body;
-    const scored = scoreCandidate(candidate, text);
+    const scored = scoreCandidate(candidate, text, isStatusNotice);
     const previous = byValue.get(candidate.value);
     if (!previous || scored.score > previous.score) {
       byValue.set(candidate.value, { candidate, ...scored });
