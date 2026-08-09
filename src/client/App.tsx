@@ -411,6 +411,20 @@ export function App() {
     return (localStorage.getItem('inbox_mate_theme') as ThemeMode) || 'system';
   });
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
+  const themeMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isThemeMenuOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (themeMenuRef.current && !themeMenuRef.current.contains(event.target as Node)) {
+        setIsThemeMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isThemeMenuOpen]);
 
   // Filters and views for email feed
   const [searchQuery, setSearchQuery] = useState('');
@@ -1134,7 +1148,7 @@ export function App() {
 
         <div className="topbar-actions">
           {/* Theme Switcher Menu */}
-          <div className="theme-menu-wrap">
+          <div className="theme-menu-wrap" ref={themeMenuRef}>
             <button
               className="theme-trigger-btn"
               type="button"

@@ -240,7 +240,7 @@ html, body {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   padding: 4px;
-  z-index: 50;
+  z-index: 110;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -2558,7 +2558,7 @@ input:focus, select:focus {
     align-items: center !important;
     justify-content: space-between !important;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-    overflow: hidden !important;
+    overflow: visible !important;
     box-sizing: border-box !important;
   }
 
