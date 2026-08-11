@@ -213,9 +213,20 @@ export function createServer(port = PORT) {
   return app;
 }
 
+import { closeSharedBrowser } from './engines/web-rpa-engine.js';
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const app = createServer(PORT);
-  app.listen(PORT, HOST, () => {
+  const server = app.listen(PORT, HOST, () => {
     console.log(`Inbox Mate listening at http://${HOST}:${PORT}`);
   });
+
+  const shutdown = async () => {
+    server.close();
+    await closeSharedBrowser();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }

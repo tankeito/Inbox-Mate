@@ -1,4 +1,4 @@
-import type { ProviderId } from '../shared/types.js';
+import type { EngineType, ProviderId } from '../shared/types.js';
 
 export interface ProviderProfile {
   id: ProviderId;
@@ -7,6 +7,7 @@ export interface ProviderProfile {
   port: number;
   domains: readonly string[];
   auth: 'oauth2' | 'app_password';
+  engineType: EngineType;
 }
 
 const MICROSOFT_DOMAINS = [
@@ -83,7 +84,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'outlook.office365.com',
     port: 993,
     domains: MICROSOFT_DOMAINS,
-    auth: 'oauth2'
+    auth: 'oauth2',
+    engineType: 'microsoft_graph'
   },
   gmx: {
     id: 'gmx',
@@ -91,7 +93,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'imap.gmx.com',
     port: 993,
     domains: GMX_DOMAINS,
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: 'imap_pop3'
   },
   rambler: {
     id: 'rambler',
@@ -99,7 +102,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'imap.rambler.ru',
     port: 993,
     domains: RAMBLER_DOMAINS,
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: 'imap_pop3'
   },
   mailru: {
     id: 'mailru',
@@ -107,7 +111,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'imap.mail.ru',
     port: 993,
     domains: MAILRU_DOMAINS,
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: 'imap_pop3'
   },
   mailcom: {
     id: 'mailcom',
@@ -115,7 +120,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'imap.mail.com',
     port: 993,
     domains: MAILCOM_DOMAINS,
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: 'web_rpa'
   },
   yahoo: {
     id: 'yahoo',
@@ -123,7 +129,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'imap.mail.yahoo.com',
     port: 993,
     domains: YAHOO_DOMAINS,
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: 'imap_pop3'
   },
   gmail: {
     id: 'gmail',
@@ -131,7 +138,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'imap.gmail.com',
     port: 993,
     domains: GMAIL_DOMAINS,
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: 'imap_pop3'
   },
   netease163: {
     id: 'netease163',
@@ -139,7 +147,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'imap.163.com',
     port: 993,
     domains: NETEASE_DOMAINS,
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: 'imap_pop3'
   },
   qq: {
     id: 'qq',
@@ -147,7 +156,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'imap.qq.com',
     port: 993,
     domains: QQ_DOMAINS,
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: 'imap_pop3'
   },
   icloud: {
     id: 'icloud',
@@ -155,7 +165,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'imap.mail.me.com',
     port: 993,
     domains: ICLOUD_DOMAINS,
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: 'imap_pop3'
   },
   zoho: {
     id: 'zoho',
@@ -163,7 +174,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'imap.zoho.com',
     port: 993,
     domains: ZOHO_DOMAINS,
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: 'imap_pop3'
   },
   fastmail: {
     id: 'fastmail',
@@ -171,7 +183,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'imap.fastmail.com',
     port: 993,
     domains: FASTMAIL_DOMAINS,
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: 'imap_pop3'
   },
   aol: {
     id: 'aol',
@@ -179,7 +192,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: 'imap.aol.com',
     port: 993,
     domains: AOL_DOMAINS,
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: 'imap_pop3'
   },
   custom: {
     id: 'custom',
@@ -187,7 +201,8 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     host: '',
     port: 993,
     domains: [],
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: 'imap_pop3'
   }
 };
 
@@ -204,13 +219,15 @@ export function domainFromEmail(email: string): string | undefined {
 
 export function autoDetectCustomProvider(email: string): ProviderProfile {
   const domain = domainFromEmail(email) || 'custom.com';
+  const isMailComDomain = (PROVIDER_REGISTRY.mailcom.domains as readonly string[]).includes(domain);
   return {
     id: 'custom',
     label: `自定义 (${domain})`,
     host: `imap.${domain}`,
     port: 993,
     domains: [domain],
-    auth: 'app_password'
+    auth: 'app_password',
+    engineType: isMailComDomain ? 'web_rpa' : 'imap_pop3'
   };
 }
 

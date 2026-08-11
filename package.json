@@ -9,6 +9,7 @@
     "dev": "npm run clean:port && concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "tsx watch src/server/index.ts",
     "dev:client": "vite",
+    "setup:browser": "npx playwright install chromium",
     "build": "tsc --noEmit && vite build",
     "start": "tsx src/server/index.ts",
     "test": "vitest run",
@@ -24,6 +25,7 @@
     "lucide-react": "^0.468.0",
     "mailparser": "^3.9.0",
     "p-limit": "^7.1.1",
+    "playwright": "^1.62.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "zod": "^4.1.5"

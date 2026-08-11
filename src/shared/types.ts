@@ -15,6 +15,8 @@ export const PROVIDER_IDS = [
   'custom'
 ] as const;
 
+export type EngineType = 'microsoft_graph' | 'imap_pop3' | 'web_rpa';
+
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type JobState = 'queued' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
 export type AccountState =
@@ -35,6 +37,8 @@ export type SafeErrorCode =
   | 'AUTH_EXPIRED'
   | 'AUTH_FAILED'
   | 'MAILCOM_IMAP_DISABLED'
+  | 'CAPTCHA_TRIGGERED'
+  | 'PROXY_BLOCKED'
   | 'CONNECTION_FAILED'
   | 'TIMEOUT'
   | 'RATE_LIMITED'

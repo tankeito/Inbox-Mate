@@ -95,7 +95,16 @@ export interface FetchAccountResult {
   primaryCode?: CodeMatch;
 }
 
+import { routeAccountEngine } from './engine-router.js';
+import { fetchAccountVerificationCodeViaWebRpa } from './engines/web-rpa-engine.js';
+
 export async function fetchAccountVerificationCode(account: AccountInput, options: FetchAccountOptions): Promise<FetchAccountResult> {
+  const engineType = routeAccountEngine(account);
+
+  if (engineType === 'web_rpa') {
+    return fetchAccountVerificationCodeViaWebRpa(account, options);
+  }
+
   if (account.customProtocol === 'pop3') {
     return fetchAccountVerificationCodeViaPop3(account, options);
   }

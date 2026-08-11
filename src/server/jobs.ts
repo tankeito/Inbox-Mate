@@ -13,8 +13,11 @@ import type {
 import { InboxMateError, isInboxMateError, safeError } from './errors.js';
 import { maskEmail } from './providers.js';
 
+import { routeAccountEngine } from './engine-router.js';
+
 const ACCOUNT_TIMEOUT_MS = 30_000;
-const JOB_TIMEOUT_MS = 120_000;
+const RPA_ACCOUNT_TIMEOUT_MS = 90_000;
+const JOB_TIMEOUT_MS = 300_000;
 const JOB_RETENTION_MS = 10 * 60_000;
 
 interface AccountRuntime {
@@ -69,13 +72,14 @@ function cloneAccount(account: AccountSnapshot): AccountSnapshot {
 
 export class JobManager {
   private readonly jobs = new Map<string, JobRuntime>();
-  private readonly globalLimit = pLimit(8);
+  private readonly globalLimit = pLimit(50);
+  private readonly rpaLimit = pLimit(3);
   private readonly providerLimits = new Map<string, ReturnType<typeof pLimit>>();
 
   private getProviderLimit(provider: string): ReturnType<typeof pLimit> {
     let limit = this.providerLimits.get(provider);
     if (!limit) {
-      limit = pLimit(4);
+      limit = pLimit(10);
       this.providerLimits.set(provider, limit);
     }
     return limit;
@@ -153,9 +157,14 @@ export class JobManager {
     try {
       await Promise.all(
         job.accounts.map((account) => {
+          if (!account.input) return Promise.resolve();
+          const engineType = routeAccountEngine(account.input);
+          if (engineType === 'web_rpa') {
+            return this.rpaLimit(() => this.executeAccount(job, account, input, RPA_ACCOUNT_TIMEOUT_MS));
+          }
           const provider = account.snapshot.provider;
           const limit = this.getProviderLimit(provider);
-          return this.globalLimit(() => limit(() => this.executeAccount(job, account, input)));
+          return this.globalLimit(() => limit(() => this.executeAccount(job, account, input, ACCOUNT_TIMEOUT_MS)));
         })
       );
       if (job.controller.signal.aborted) {
@@ -173,7 +182,12 @@ export class JobManager {
     }
   }
 
-  private async executeAccount(job: JobRuntime, account: AccountRuntime, input: CreateJobInput): Promise<void> {
+  private async executeAccount(
+    job: JobRuntime,
+    account: AccountRuntime,
+    input: CreateJobInput,
+    timeoutMs = ACCOUNT_TIMEOUT_MS
+  ): Promise<void> {
     if (job.controller.signal.aborted || !account.input) {
       this.setAccountState(job, account, 'cancelled');
       return;
@@ -184,7 +198,7 @@ export class JobManager {
     const timeout = setTimeout(() => {
       timedOut = true;
       timeoutController.abort();
-    }, ACCOUNT_TIMEOUT_MS);
+    }, timeoutMs);
     timeout.unref();
     const combined = AbortSignal.any([job.controller.signal, timeoutController.signal]);
 
@@ -211,7 +225,7 @@ export class JobManager {
       } else if (job.controller.signal.aborted || combined.aborted) {
         this.setAccountState(job, account, 'cancelled');
       } else if (isInboxMateError(error)) {
-        this.setAccountState(job, account, 'failed', safeError(error.code));
+        this.setAccountState(job, account, 'failed', safeError(error.code, error.customMessage));
       } else {
         this.setAccountState(job, account, 'failed', safeError('INTERNAL'));
       }
