@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import net from 'node:net';
 import { simpleParser } from 'mailparser';
-import { chromium, type Browser, type BrowserContext, type Frame, type Page, type Response } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Frame, type Locator, type Page, type Response } from 'playwright';
 import type { AccountInput, CodeMatch, EmailItem } from '../../shared/types.js';
 import { extractVerificationCode } from '../../shared/verification-code.js';
 import { InboxMateError } from '../errors.js';
@@ -15,6 +15,10 @@ const BODY_FETCH_TIMEOUT_MS = 12_000;
 const MAX_BODY_BYTES = 512 * 1024;
 const WINDOWS_PROXY_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
 const LOCAL_PROXY_PORTS = [7897, 7890, 10809, 10808, 7891] as const;
+export const MAIL_COM_LOGIN_TRIGGER_SELECTOR = [
+  'a.button.button-login[href="homepage.html#navlogin"]',
+  '#login-button'
+].join(', ');
 
 let sharedBrowser: Browser | null = null;
 let browserPromise: Promise<Browser> | null = null;
@@ -370,6 +374,41 @@ function isAuthenticationFailure(url: string, content: string): boolean {
   );
 }
 
+async function loginFieldsAreVisible(emailInput: Locator, passwordInput: Locator): Promise<boolean> {
+  const [emailVisible, passwordVisible] = await Promise.all([
+    emailInput.isVisible().catch(() => false),
+    passwordInput.isVisible().catch(() => false)
+  ]);
+  return emailVisible && passwordVisible;
+}
+
+export async function ensureMailComLoginFormVisible(
+  page: Page
+): Promise<{ emailInput: Locator; passwordInput: Locator }> {
+  const emailInput = page.locator('#login-email');
+  const passwordInput = page.locator('#login-password');
+  if (await loginFieldsAreVisible(emailInput, passwordInput)) return { emailInput, passwordInput };
+
+  const loginTrigger = page.locator(MAIL_COM_LOGIN_TRIGGER_SELECTOR).filter({ visible: true }).first();
+  await loginTrigger.waitFor({ state: 'visible', timeout: 10_000 });
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await loginTrigger.click({ timeout: 10_000 });
+    const formVisible = await Promise.all([
+      emailInput.waitFor({ state: 'visible', timeout: 4000 }),
+      passwordInput.waitFor({ state: 'visible', timeout: 4000 })
+    ])
+      .then(() => true)
+      .catch(() => false);
+    if (formVisible && (await loginFieldsAreVisible(emailInput, passwordInput))) {
+      return { emailInput, passwordInput };
+    }
+    if (attempt < 2) await page.waitForTimeout(500);
+  }
+
+  throw new InboxMateError('TIMEOUT', 400, 'Mail.com 登录框未能显示账号和密码输入框。');
+}
+
 async function parseMailboxDom(page: Page): Promise<CapturedMailPayload[]> {
   const frame = page.frames().find((candidate) => candidate.url().startsWith('https://webmailer.mail.com/'));
   if (!frame) return [];
@@ -671,23 +710,11 @@ export async function fetchAccountVerificationCodeViaWebRpa(
 
     stage = '打开登录框';
     await page.waitForLoadState('load', { timeout: 10_000 }).catch(() => {});
-    const loginButton = page.locator('#login-button').filter({ visible: true });
-    await loginButton.waitFor({ state: 'visible', timeout: 10_000 });
-    const emailInput = page.locator('#login-email');
-    const passwordInput = page.locator('#login-password');
-    let loginFormVisible = false;
-    for (let attempt = 0; attempt < 3 && !loginFormVisible; attempt += 1) {
-      await loginButton.click({ timeout: 10_000 });
-      loginFormVisible = await emailInput
-        .waitFor({ state: 'visible', timeout: 4000 })
-        .then(() => true)
-        .catch(() => false);
-      if (!loginFormVisible) await page.waitForTimeout(500);
-    }
+    const { emailInput, passwordInput } = await ensureMailComLoginFormVisible(page);
 
     stage = '填写账号密码';
-    await emailInput.fill(email, { force: !loginFormVisible });
-    await passwordInput.fill(password, { force: !loginFormVisible });
+    await emailInput.fill(email);
+    await passwordInput.fill(password);
 
     options.onProgress('searching');
     stage = '提交登录';

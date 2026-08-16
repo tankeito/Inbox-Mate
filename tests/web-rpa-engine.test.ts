@@ -1,10 +1,94 @@
-import { describe, expect, it } from 'vitest';
+import type { Page } from 'playwright';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  ensureMailComLoginFormVisible,
   fetchAccountVerificationCodeViaWebRpa,
+  MAIL_COM_LOGIN_TRIGGER_SELECTOR,
   parseMailComListPayload,
   parseWindowsProxyServer,
   selectMailComMessages
 } from '../src/server/engines/web-rpa-engine';
+
+function createLoginPage(options: { initiallyVisible?: boolean; revealOnClick?: boolean } = {}) {
+  let formVisible = options.initiallyVisible ?? false;
+  const revealOnClick = options.revealOnClick ?? true;
+  const makeInput = () => ({
+    isVisible: vi.fn(async () => formVisible),
+    waitFor: vi.fn(async () => {
+      if (!formVisible) throw new Error('input remains hidden');
+    })
+  });
+  const emailInput = makeInput();
+  const passwordInput = makeInput();
+  const loginTrigger = {
+    waitFor: vi.fn(async () => {}),
+    click: vi.fn(async () => {
+      if (revealOnClick) formVisible = true;
+    })
+  };
+  const first = vi.fn(() => loginTrigger);
+  const filter = vi.fn(() => ({ first }));
+  const locator = vi.fn((selector: string) => {
+    if (selector === '#login-email') return emailInput;
+    if (selector === '#login-password') return passwordInput;
+    if (selector === MAIL_COM_LOGIN_TRIGGER_SELECTOR) return { filter };
+    throw new Error(`Unexpected selector: ${selector}`);
+  });
+  const waitForTimeout = vi.fn(async () => {});
+
+  return {
+    page: { locator, waitForTimeout } as unknown as Page,
+    emailInput,
+    passwordInput,
+    loginTrigger,
+    locator,
+    filter,
+    first,
+    waitForTimeout
+  };
+}
+
+describe('Mail.com login form entry', () => {
+  it('keeps the current visible link and legacy id selectors', () => {
+    expect(MAIL_COM_LOGIN_TRIGGER_SELECTOR.split(', ')).toEqual([
+      'a.button.button-login[href="homepage.html#navlogin"]',
+      '#login-button'
+    ]);
+  });
+
+  it('opens the login form and waits for both credential fields', async () => {
+    const fixture = createLoginPage();
+
+    const result = await ensureMailComLoginFormVisible(fixture.page);
+
+    expect(fixture.locator).toHaveBeenCalledWith(MAIL_COM_LOGIN_TRIGGER_SELECTOR);
+    expect(fixture.filter).toHaveBeenCalledWith({ visible: true });
+    expect(fixture.first).toHaveBeenCalledOnce();
+    expect(fixture.loginTrigger.waitFor).toHaveBeenCalledWith({ state: 'visible', timeout: 10_000 });
+    expect(fixture.loginTrigger.click).toHaveBeenCalledOnce();
+    expect(fixture.emailInput.waitFor).toHaveBeenCalledWith({ state: 'visible', timeout: 4000 });
+    expect(fixture.passwordInput.waitFor).toHaveBeenCalledWith({ state: 'visible', timeout: 4000 });
+    expect(result.emailInput).toBe(fixture.emailInput);
+    expect(result.passwordInput).toBe(fixture.passwordInput);
+  });
+
+  it('does not click the login trigger when the form is already visible', async () => {
+    const fixture = createLoginPage({ initiallyVisible: true });
+
+    await ensureMailComLoginFormVisible(fixture.page);
+
+    expect(fixture.locator).not.toHaveBeenCalledWith(MAIL_COM_LOGIN_TRIGGER_SELECTOR);
+    expect(fixture.loginTrigger.click).not.toHaveBeenCalled();
+  });
+
+  it('fails explicitly when both credential fields never become visible', async () => {
+    const fixture = createLoginPage({ revealOnClick: false });
+
+    await expect(ensureMailComLoginFormVisible(fixture.page)).rejects.toMatchObject({ code: 'TIMEOUT' });
+    expect(fixture.loginTrigger.click).toHaveBeenCalledTimes(3);
+    expect(fixture.waitForTimeout).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('Mail.com Web RPA payload parsing', () => {
   it('parses the current maillist.mail.com response shape', () => {
