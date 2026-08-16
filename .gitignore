@@ -47,3 +47,5 @@ scratch_*.js
 # Documentation & PDF exports
 doc/
 *.pdf
+tmp/
+

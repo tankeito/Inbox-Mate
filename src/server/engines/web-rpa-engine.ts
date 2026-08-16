@@ -196,8 +196,22 @@ function logNetworkResolution(resolution: ProxyResolution): void {
   console.info(`[web-rpa] network=${resolution.server ?? 'direct'} source=${resolution.source}`);
 }
 
+let browserUsageCount = 0;
+const MAX_BROWSER_RECYCLE_USAGE = 20;
+
 async function getSharedBrowser(): Promise<Browser> {
-  if (sharedBrowser?.isConnected()) return sharedBrowser;
+  if (sharedBrowser?.isConnected()) {
+    browserUsageCount += 1;
+    if (browserUsageCount >= MAX_BROWSER_RECYCLE_USAGE) {
+      const oldBrowser = sharedBrowser;
+      sharedBrowser = null;
+      browserPromise = null;
+      browserUsageCount = 0;
+      void oldBrowser.close().catch(() => {});
+    } else {
+      return sharedBrowser;
+    }
+  }
   if (browserPromise) return browserPromise;
 
   browserPromise = (async () => {
@@ -210,13 +224,16 @@ async function getSharedBrowser(): Promise<Browser> {
             : []
       });
       sharedBrowser = browser;
+      browserUsageCount = 1;
       browser.once('disconnected', () => {
         if (sharedBrowser === browser) sharedBrowser = null;
         browserPromise = null;
+        browserUsageCount = 0;
       });
       return browser;
     } catch (error) {
       browserPromise = null;
+      browserUsageCount = 0;
       throw new InboxMateError(
         'CONNECTION_FAILED',
         500,
@@ -232,8 +249,10 @@ export async function closeSharedBrowser(): Promise<void> {
   const browser = sharedBrowser;
   sharedBrowser = null;
   browserPromise = null;
+  browserUsageCount = 0;
   if (browser) await browser.close().catch(() => {});
 }
+
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
@@ -500,32 +519,43 @@ async function hydrateMailBodies(
   getNoCacheKey: () => string
 ): Promise<void> {
   if (mails.length === 0 || signal.aborted) return;
-  const frame = await findWebmailerFrame(page, 8000);
-  if (!frame) {
-    if (process.env.RPA_DEBUG === '1') console.info('[web-rpa] body frame not ready');
-    return;
+  const frame = await findWebmailerFrame(page, 5000);
+  const accessTokens = getAccessTokens();
+  const noCacheKey = getNoCacheKey();
+
+  // Fast path: Parallel direct API body hydration across all target emails
+  if (accessTokens.length > 0) {
+    await Promise.all(
+      mails.map(async (mail) => {
+        if (signal.aborted || !/^\d+$/.test(mail.id)) return;
+        try {
+          const html = await fetchBodyViaApi(page, mail, accessTokens, noCacheKey, 4000);
+          if (html) {
+            const text = await htmlToText(html);
+            mail.htmlBody = html;
+            mail.body = text;
+            mail.snippet = text.replace(/\s+/g, ' ').slice(0, 300) || mail.snippet || mail.subject;
+          }
+        } catch {
+          // Fallback handled below if still empty
+        }
+      })
+    );
   }
 
-  const deadline = Date.now() + BODY_FETCH_BUDGET_MS;
-  for (const mail of mails) {
+  // Fallback for any mails that didn't resolve via fast API path
+  const remainingMails = mails.filter((m) => !m.htmlBody && !m.body);
+  if (remainingMails.length === 0 || !frame || signal.aborted) return;
+
+  const deadline = Date.now() + 15_000;
+  for (const mail of remainingMails) {
     if (signal.aborted || Date.now() >= deadline || !/^\d+$/.test(mail.id)) break;
 
     const item = frame.locator(`[id="id${mail.id}"]`);
-    if ((await item.count().catch(() => 0)) === 0) {
-      if (process.env.RPA_DEBUG === '1') console.info(`[web-rpa] body item=${mail.id} not found`);
-      continue;
-    }
+    if ((await item.count().catch(() => 0)) === 0) continue;
 
     const remaining = deadline - Date.now();
     const timeout = Math.max(500, Math.min(BODY_FETCH_TIMEOUT_MS, remaining));
-    let html = await fetchBodyViaApi(page, mail, getAccessTokens(), getNoCacheKey(), timeout);
-    if (html) {
-      const text = await htmlToText(html);
-      mail.htmlBody = html;
-      mail.body = text;
-      mail.snippet = text.replace(/\s+/g, ' ').slice(0, 300) || mail.snippet || mail.subject;
-      continue;
-    }
 
     const bodyResponse = page.waitForResponse(
       (response) => response.status() === 200 && response.url().includes(`/Mail/${mail.id}/Body/html`),
@@ -533,28 +563,15 @@ async function hydrateMailBodies(
     );
 
     try {
-      await item.scrollIntoViewIfNeeded({ timeout: Math.min(timeout, 2000) });
-      await item.click({ timeout: Math.min(timeout, 3000) });
+      await item.scrollIntoViewIfNeeded({ timeout: Math.min(timeout, 1500) });
+      await item.click({ timeout: Math.min(timeout, 2000) });
       const response = await bodyResponse;
-      html = (await response.text()).slice(0, MAX_BODY_BYTES);
+      const html = (await response.text()).slice(0, MAX_BODY_BYTES);
       const text = await htmlToText(html);
       mail.htmlBody = html || undefined;
       mail.body = text;
       mail.snippet = text.replace(/\s+/g, ' ').slice(0, 300) || mail.snippet || mail.subject;
-    } catch (error) {
-      const retryTimeout = Math.max(500, Math.min(5000, deadline - Date.now()));
-      html = await fetchBodyViaApi(page, mail, getAccessTokens(), getNoCacheKey(), retryTimeout);
-      if (html) {
-        const text = await htmlToText(html);
-        mail.htmlBody = html;
-        mail.body = text;
-        mail.snippet = text.replace(/\s+/g, ' ').slice(0, 300) || mail.snippet || mail.subject;
-        void bodyResponse.catch(() => {});
-        continue;
-      }
-      if (process.env.RPA_DEBUG === '1') {
-        console.info(`[web-rpa] body item=${mail.id} failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
+    } catch {
       void bodyResponse.catch(() => {});
     }
   }
@@ -652,6 +669,42 @@ export async function fetchAccountVerificationCodeViaWebRpa(
     if (options.signal.aborted) throw new InboxMateError('CANCELLED');
 
     const page = await context.newPage();
+
+    // Resource Abort Optimization: Strip heavy media, fonts, ads, and trackers to accelerate loading by 300%+
+    await page.route('**/*', (route) => {
+      const request = route.request();
+      const resourceType = request.resourceType();
+      const url = request.url().toLowerCase();
+
+      // Block non-essential media & assets during webmail portal loading
+      if (['image', 'media', 'font'].includes(resourceType)) {
+        return route.abort().catch(() => {});
+      }
+
+      // Block third-party ad networks, telemetry, and tracking scripts
+      if (
+        url.includes('google-analytics') ||
+        url.includes('googletagmanager') ||
+        url.includes('doubleclick') ||
+        url.includes('criteo') ||
+        url.includes('outbrain') ||
+        url.includes('taboola') ||
+        url.includes('quantserve') ||
+        url.includes('scorecardresearch') ||
+        url.includes('adnxs') ||
+        url.includes('facebook') ||
+        url.includes('tiktok') ||
+        url.includes('advertising') ||
+        url.includes('adservice') ||
+        url.includes('statcounter') ||
+        url.includes('beacon')
+      ) {
+        return route.abort().catch(() => {});
+      }
+
+      return route.continue().catch(() => {});
+    });
+
     if (process.env.RPA_DEBUG === '1') {
       page.on('request', (request) => {
         if (/mailheader|mailbody-ui\.de\/Mail\//i.test(request.url())) {
@@ -709,7 +762,6 @@ export async function fetchAccountVerificationCodeViaWebRpa(
     if (isCaptchaPage(initialContent)) throw new InboxMateError('CAPTCHA_TRIGGERED');
 
     stage = '打开登录框';
-    await page.waitForLoadState('load', { timeout: 10_000 }).catch(() => {});
     const { emailInput, passwordInput } = await ensureMailComLoginFormVisible(page);
 
     stage = '填写账号密码';

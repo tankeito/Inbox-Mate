@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  Bot,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -40,6 +41,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { parseAccountTextSmart, parseAccountLineSmart, type ParseMode, type SmartParsedAccount } from '../shared/account-parser.js';
+import { isClaudeEmail, isChatGptEmail, isAiOfficialEmail, getAiServiceMatch } from '../shared/ai-filter.js';
 
 type Provider =
   | 'microsoft'
@@ -431,6 +433,8 @@ export function App() {
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [accountFilter, setAccountFilter] = useState<string>('all');
   const [onlyCodeFilter, setOnlyCodeFilter] = useState<boolean>(false);
+  const [onlyChatGptFilter, setOnlyChatGptFilter] = useState<boolean>(false);
+  const [onlyClaudeFilter, setOnlyClaudeFilter] = useState<boolean>(false);
   const [feedViewMode, setFeedViewMode] = useState<'grid' | 'list'>('grid');
   const [activeMobileTab, setActiveMobileTab] = useState<'queue' | 'feed' | 'settings'>('feed');
   const [selectedMailModal, setSelectedMailModal] = useState<EmailItem | null>(null);
@@ -508,7 +512,7 @@ export function App() {
   // Reset feed page to 1 when filters or search change
   useEffect(() => {
     setFeedPage(1);
-  }, [debouncedSearchQuery, accountFilter, onlyCodeFilter, feedPageSize]);
+  }, [debouncedSearchQuery, accountFilter, onlyCodeFilter, onlyChatGptFilter, onlyClaudeFilter, feedPageSize]);
 
   // Stats calculation
   const stats = useMemo(() => {
@@ -519,6 +523,8 @@ export function App() {
 
     let totalMails = 0;
     let codeMails = 0;
+    let chatGptMails = 0;
+    let claudeMails = 0;
     const allMails: EmailItem[] = [];
 
     accounts.forEach((account) => {
@@ -527,6 +533,8 @@ export function App() {
         account.messages.forEach((msg) => {
           allMails.push(msg);
           if (msg.codeMatch?.code) codeMails += 1;
+          if (isChatGptEmail(msg)) chatGptMails += 1;
+          if (isClaudeEmail(msg)) claudeMails += 1;
         });
       }
     });
@@ -538,9 +546,44 @@ export function App() {
       failedAccounts,
       totalMails,
       codeMails,
+      chatGptMails,
+      claudeMails,
       allMails,
     };
   }, [accounts]);
+
+  const progressPercent = useMemo(() => {
+    if (accounts.length === 0) return 0;
+    if (!isRunning && stats.completedAccounts === 0) return 0;
+    if (!isRunning && stats.completedAccounts === stats.totalAccounts) return 100;
+
+    let totalWeight = 0;
+    for (const account of accounts) {
+      switch (account.status) {
+        case 'queued':
+          totalWeight += 0.15;
+          break;
+        case 'connecting':
+          totalWeight += 0.40;
+          break;
+        case 'searching':
+          totalWeight += 0.75;
+          break;
+        case 'found':
+        case 'no_code':
+        case 'failed':
+        case 'cancelled':
+          totalWeight += 1.0;
+          break;
+        default:
+          totalWeight += isRunning ? 0.10 : 0;
+          break;
+      }
+    }
+
+    const percent = Math.min(100, Math.round((totalWeight / accounts.length) * 100));
+    return percent;
+  }, [accounts, isRunning, stats.completedAccounts, stats.totalAccounts]);
 
   const [feedGroupMode, setFeedGroupMode] = useState<'timeline' | 'grouped'>('timeline');
 
@@ -548,6 +591,16 @@ export function App() {
   const filteredEmails = useMemo(() => {
     return stats.allMails.filter((mail) => {
       if (onlyCodeFilter && !mail.codeMatch?.code) return false;
+
+      // AI Service Filtering: Separate or Combined
+      if (onlyChatGptFilter && onlyClaudeFilter) {
+        if (!isAiOfficialEmail(mail)) return false;
+      } else if (onlyChatGptFilter) {
+        if (!isChatGptEmail(mail)) return false;
+      } else if (onlyClaudeFilter) {
+        if (!isClaudeEmail(mail)) return false;
+      }
+
       if (accountFilter !== 'all' && mail.accountEmail.toLowerCase() !== accountFilter.toLowerCase()) return false;
       if (debouncedSearchQuery.trim()) {
         const q = debouncedSearchQuery.toLowerCase();
@@ -560,7 +613,7 @@ export function App() {
       }
       return true;
     });
-  }, [stats.allMails, onlyCodeFilter, accountFilter, debouncedSearchQuery]);
+  }, [stats.allMails, onlyCodeFilter, onlyChatGptFilter, onlyClaudeFilter, accountFilter, debouncedSearchQuery]);
 
   const groupedEmails = useMemo(() => {
     const map = new Map<string, EmailItem[]>();
@@ -1700,7 +1753,7 @@ name@mail.ru----外置应用专用密码`}
 
               {/* Mobile Toolbar Bottom Actions */}
               <div className="toolbar-bottom-actions">
-                <label className="toggle-chip">
+                <label className="toggle-chip" title="仅显示含验证码的邮件">
                   <input
                     type="checkbox"
                     checked={onlyCodeFilter}
@@ -1708,6 +1761,32 @@ name@mail.ru----外置应用专用密码`}
                   />
                   <span className="toggle-slider"></span>
                   <span className="toggle-label">仅验证码</span>
+                </label>
+
+                <label className="toggle-chip toggle-chip-chatgpt" title="仅显示 ChatGPT / OpenAI 官方邮件 (可与 Claude 组合)">
+                  <input
+                    type="checkbox"
+                    checked={onlyChatGptFilter}
+                    onChange={(e) => setOnlyChatGptFilter(e.target.checked)}
+                  />
+                  <span className="toggle-slider slider-chatgpt"></span>
+                  <span className="toggle-label">
+                    <Bot size={11} className="icon-chatgpt" />
+                    <span>ChatGPT</span>
+                  </span>
+                </label>
+
+                <label className="toggle-chip toggle-chip-claude" title="仅显示 Claude / Anthropic 官方邮件 (可与 ChatGPT 组合)">
+                  <input
+                    type="checkbox"
+                    checked={onlyClaudeFilter}
+                    onChange={(e) => setOnlyClaudeFilter(e.target.checked)}
+                  />
+                  <span className="toggle-slider slider-claude"></span>
+                  <span className="toggle-label">
+                    <Sparkles size={11} className="icon-claude" />
+                    <span>Claude</span>
+                  </span>
                 </label>
 
                 <div className="group-mode-toggle-pill">
@@ -1754,6 +1833,22 @@ name@mail.ru----外置应用专用密码`}
 
           {/* Email Cards Feed Grid */}
           <div className={`feed-scroll-container view-${feedViewMode} display-${feedGroupMode}`}>
+            {/* Top Live Progress Floating Banner (Shown while background workers are fetching more accounts) */}
+            {isRunning && filteredEmails.length > 0 && (
+              <div className="feed-running-floating-banner">
+                <div className="banner-left-info">
+                  <LoaderCircle size={14} className="spin-fast text-cyan" />
+                  <span>正在后台并发拉取其余邮箱 (<strong>{stats.completedAccounts}</strong> / {stats.totalAccounts})</span>
+                </div>
+                <div className="banner-center-track">
+                  <div className="banner-progress-fill" style={{ width: `${Math.max(5, progressPercent)}%` }}></div>
+                </div>
+                <div className="banner-right-info">
+                  <span>已检出 <strong className="text-cyan">{stats.totalMails}</strong> 封邮件</span>
+                </div>
+              </div>
+            )}
+
             {filteredEmails.length > 0 ? (
               feedGroupMode === 'grouped' ? (
                 paginatedGroupedEmails.map((group) => (
@@ -1777,15 +1872,101 @@ name@mail.ru----外置应用专用密码`}
                   />
                 ))
               )
+            ) : isRunning ? (
+              /* Dynamic Live Fetching Orchestrator Card (Real-time Radar & Pipeline Tracker) */
+              <div className="feed-fetching-orchestrator-card">
+                {/* 1. Glowing Radar Spinner Centerpiece */}
+                <div className="fetching-radar-hero">
+                  <div className="radar-glow-ring ring-outer"></div>
+                  <div className="radar-glow-ring ring-mid"></div>
+                  <div className="radar-core-hub">
+                    <LoaderCircle size={36} className="radar-spinner-svg text-cyan" />
+                    <Mail size={18} className="radar-mail-svg text-cyan" />
+                  </div>
+                </div>
+
+                {/* 2. Realtime Live Text Info */}
+                <div className="fetching-text-group">
+                  <div className="fetching-title-badge-row">
+                    <h3 className="fetching-main-title">正在多邮箱并发安全检索中...</h3>
+                    <span className="live-pulse-badge">
+                      <span className="pulse-dot"></span>
+                      LIVE 实时流
+                    </span>
+                  </div>
+                  <p className="fetching-subtext">
+                    后端多线程与协议引擎正通过安全通道拉取最新 INBOX 邮件，抓取结果将实时流式推送到此处
+                  </p>
+                </div>
+
+                {/* 3. Realtime Dual-color Progress Bar */}
+                <div className="fetching-progress-card">
+                  <div className="progress-top-stats">
+                    <span className="progress-stat-left">
+                      已就绪 <strong>{stats.completedAccounts}</strong> / {stats.totalAccounts} 账号
+                      {stats.activeAccounts > 0 && (
+                        <span className="active-working-tag">
+                          <LoaderCircle size={10} className="spin-fast" /> 进行中: {stats.activeAccounts}
+                        </span>
+                      )}
+                    </span>
+                    <span className="progress-stat-right">
+                      <strong>{progressPercent}%</strong>
+                    </span>
+                  </div>
+
+                  <div className="fetching-progress-track">
+                    <div
+                      className="fetching-progress-bar"
+                      style={{ width: `${Math.max(6, progressPercent)}%` }}
+                    >
+                      <div className="progress-shimmer-sweep"></div>
+                    </div>
+                  </div>
+
+                  {/* Realtime 3-stage Pipeline Status */}
+                  <div className="pipeline-steps-container">
+                    <div className={`pipeline-step ${stats.activeAccounts > 0 ? 'step-active' : 'step-done'}`}>
+                      <span className="step-indicator"></span>
+                      <span>1. 协议握手与安全鉴权</span>
+                    </div>
+                    <div className={`pipeline-step ${stats.activeAccounts > 0 ? 'step-active' : ''}`}>
+                      <span className="step-indicator"></span>
+                      <span>2. INBOX 索引流式扫描</span>
+                    </div>
+                    <div className={`pipeline-step ${stats.totalMails > 0 ? 'step-active' : ''}`}>
+                      <span className="step-indicator"></span>
+                      <span>3. 智能正则提取验证码</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Shimmer Skeleton Placeholder Previews */}
+                <div className="skeleton-preview-deck">
+                  <div className="skeleton-mail-card skeleton-card-1">
+                    <div className="skeleton-row header-row">
+                      <div className="skeleton-chip skeleton-pulse"></div>
+                      <div className="skeleton-badge skeleton-pulse"></div>
+                    </div>
+                    <div className="skeleton-line line-title skeleton-pulse"></div>
+                    <div className="skeleton-line line-body-1 skeleton-pulse"></div>
+                    <div className="skeleton-line line-body-2 skeleton-pulse"></div>
+                  </div>
+                  <div className="skeleton-mail-card skeleton-card-2">
+                    <div className="skeleton-row header-row">
+                      <div className="skeleton-chip skeleton-pulse"></div>
+                      <div className="skeleton-badge skeleton-pulse"></div>
+                    </div>
+                    <div className="skeleton-line line-title skeleton-pulse"></div>
+                    <div className="skeleton-line line-body-1 skeleton-pulse"></div>
+                  </div>
+                </div>
+              </div>
             ) : (
               <div className="feed-empty-state">
                 <Inbox size={48} className="empty-icon text-muted" />
-                <h3>{isRunning ? '正在连接各邮箱拉取邮件...' : '暂无符合条件的邮件'}</h3>
-                <p>
-                  {isRunning
-                    ? '后端服务正通过 IMAP 并发搜索 INBOX 最近邮件，抓取结果将实时推送到此处'
-                    : '在左侧点击【开始并发抓取】，或者修改顶部的搜索过滤条件'}
-                </p>
+                <h3>暂无符合条件的邮件</h3>
+                <p>在左侧点击【开始并发抓取】，或者修改顶部的搜索过滤条件</p>
               </div>
             )}
           </div>
@@ -2403,6 +2584,7 @@ function EmailCard({
   onCopyCode: (code: string) => void;
 }) {
   const hasCode = Boolean(email.codeMatch?.code && email.codeMatch?.confidence !== 'low');
+  const aiMatch = getAiServiceMatch(email);
 
   return (
     <article className={`email-card ${hasCode ? 'has-code' : ''}`}>
@@ -2411,7 +2593,15 @@ function EmailCard({
           <Mail size={12} />
           <span>{email.accountEmail}</span>
         </div>
-        <span className="received-time">{timestampLabel(email.receivedAt)}</span>
+        <div className="card-topline-right">
+          {aiMatch.isOfficial && (
+            <span className={`ai-brand-badge brand-${aiMatch.service}`} title={`${aiMatch.label}认证`}>
+              <Bot size={10} />
+              <span>{aiMatch.label}</span>
+            </span>
+          )}
+          <span className="received-time">{timestampLabel(email.receivedAt)}</span>
+        </div>
       </div>
 
       <div className="email-header">
@@ -2525,6 +2715,7 @@ function EmailReaderModal({
   const hasCode = Boolean(email.codeMatch?.code);
   const isHighConfidence = email.codeMatch?.confidence === 'high' || email.codeMatch?.confidence === 'medium';
   const providerLabel = providerDetails[email.provider]?.label ?? email.provider;
+  const aiMatch = getAiServiceMatch(email);
 
   const htmlContentToRender = email.htmlBody || convertTextToHtml(email.textBody || email.snippet || '(无邮件正文内容)');
 
@@ -2557,6 +2748,12 @@ function EmailReaderModal({
               <Mail size={12} />
               <span>{email.accountEmail}</span>
             </span>
+            {aiMatch.isOfficial && (
+              <span className={`ai-brand-badge brand-${aiMatch.service}`}>
+                <Bot size={11} />
+                <span>{aiMatch.label}</span>
+              </span>
+            )}
           </div>
           <button className="icon-btn modal-close-btn" type="button" onClick={onClose} title="关闭 (Esc)">
             <X size={18} />

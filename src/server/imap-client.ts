@@ -134,6 +134,10 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
       port,
       secure: true,
       servername: host,
+      tls: {
+        rejectUnauthorized: false,
+        minVersion: 'TLSv1.2'
+      },
       auth,
       disableAutoIdle: true,
       connectionTimeout,
@@ -141,6 +145,7 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
       socketTimeout: connectionTimeout + 5000,
       logger: false
     });
+
 
     options.onProgress('connecting');
     await client.connect();
