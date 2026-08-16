@@ -196,22 +196,12 @@ function logNetworkResolution(resolution: ProxyResolution): void {
   console.info(`[web-rpa] network=${resolution.server ?? 'direct'} source=${resolution.source}`);
 }
 
+let activeRunningAccounts = 0;
 let browserUsageCount = 0;
-const MAX_BROWSER_RECYCLE_USAGE = 20;
+const MAX_BROWSER_RECYCLE_USAGE = 30;
 
 async function getSharedBrowser(): Promise<Browser> {
-  if (sharedBrowser?.isConnected()) {
-    browserUsageCount += 1;
-    if (browserUsageCount >= MAX_BROWSER_RECYCLE_USAGE) {
-      const oldBrowser = sharedBrowser;
-      sharedBrowser = null;
-      browserPromise = null;
-      browserUsageCount = 0;
-      void oldBrowser.close().catch(() => {});
-    } else {
-      return sharedBrowser;
-    }
-  }
+  if (sharedBrowser?.isConnected()) return sharedBrowser;
   if (browserPromise) return browserPromise;
 
   browserPromise = (async () => {
@@ -224,7 +214,6 @@ async function getSharedBrowser(): Promise<Browser> {
             : []
       });
       sharedBrowser = browser;
-      browserUsageCount = 1;
       browser.once('disconnected', () => {
         if (sharedBrowser === browser) sharedBrowser = null;
         browserPromise = null;
@@ -245,6 +234,19 @@ async function getSharedBrowser(): Promise<Browser> {
   return browserPromise;
 }
 
+async function acquireBrowser(): Promise<Browser> {
+  activeRunningAccounts += 1;
+  browserUsageCount += 1;
+  return getSharedBrowser();
+}
+
+async function releaseBrowser(): Promise<void> {
+  activeRunningAccounts = Math.max(0, activeRunningAccounts - 1);
+  if (activeRunningAccounts === 0 && browserUsageCount >= MAX_BROWSER_RECYCLE_USAGE) {
+    await closeSharedBrowser();
+  }
+}
+
 export async function closeSharedBrowser(): Promise<void> {
   const browser = sharedBrowser;
   sharedBrowser = null;
@@ -252,6 +254,7 @@ export async function closeSharedBrowser(): Promise<void> {
   browserUsageCount = 0;
   if (browser) await browser.close().catch(() => {});
 }
+
 
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -384,14 +387,28 @@ function isCaptchaPage(content: string): boolean {
 
 function isAuthenticationFailure(url: string, content: string): boolean {
   const normalized = content.toLowerCase();
+  const normalizedUrl = url.toLowerCase();
   return (
-    /\/logout\/?\?ls=(?:wd|te)/i.test(url) ||
+    /\/logout\/?\?ls=(?:wd|te|failed)/i.test(normalizedUrl) ||
+    normalizedUrl.includes('error=invalid') ||
+    normalizedUrl.includes('error=auth') ||
     normalized.includes('invalid credentials') ||
     normalized.includes('incorrect login or password') ||
+    normalized.includes('incorrect login') ||
     normalized.includes('wrong password') ||
-    normalized.includes('please check your email address and password')
+    normalized.includes('password is incorrect') ||
+    normalized.includes('authentication failed') ||
+    normalized.includes('login failed') ||
+    normalized.includes('please check your email address and password') ||
+    normalized.includes('please check your email address or password') ||
+    normalized.includes('user name and password do not match') ||
+    normalized.includes('access denied') ||
+    normalized.includes('account has been locked') ||
+    normalized.includes('temporarily locked') ||
+    normalized.includes('your login was not successful')
   );
 }
+
 
 async function loginFieldsAreVisible(emailInput: Locator, passwordInput: Locator): Promise<boolean> {
   const [emailVisible, passwordVisible] = await Promise.all([
@@ -660,7 +677,7 @@ export async function fetchAccountVerificationCodeViaWebRpa(
 
   try {
     options.onProgress('authenticating');
-    const browser = await getSharedBrowser();
+    const browser = await acquireBrowser();
     context = await browser.newContext({
       proxy: proxy.server ? { server: proxy.server } : undefined,
       viewport: { width: 1280, height: 800 },
@@ -670,36 +687,50 @@ export async function fetchAccountVerificationCodeViaWebRpa(
 
     const page = await context.newPage();
 
-    // Resource Abort Optimization: Strip heavy media, fonts, ads, and trackers to accelerate loading by 300%+
+    // Resource Abort Optimization: Strip heavy media, fonts, ads, and trackers while safely whitelisting 1st-party
     await page.route('**/*', (route) => {
       const request = route.request();
       const resourceType = request.resourceType();
-      const url = request.url().toLowerCase();
+      let hostname = '';
+      try {
+        hostname = new URL(request.url()).hostname.toLowerCase();
+      } catch {
+        return route.continue().catch(() => {});
+      }
 
-      // Block non-essential media & assets during webmail portal loading
+      // Always allow 1st-party Mail.com / 1&1 / UI-Portal domains & essential auth scripts
+      const isFirstParty =
+        hostname.endsWith('mail.com') ||
+        hostname.endsWith('mailbody-ui.de') ||
+        hostname.endsWith('ui-portal.de') ||
+        hostname.endsWith('1and1.com') ||
+        hostname.endsWith('1und1.de') ||
+        hostname.endsWith('gmx.com') ||
+        hostname.endsWith('gmx.net');
+
+      // Block non-essential media & assets
       if (['image', 'media', 'font'].includes(resourceType)) {
         return route.abort().catch(() => {});
       }
 
-      // Block third-party ad networks, telemetry, and tracking scripts
-      if (
-        url.includes('google-analytics') ||
-        url.includes('googletagmanager') ||
-        url.includes('doubleclick') ||
-        url.includes('criteo') ||
-        url.includes('outbrain') ||
-        url.includes('taboola') ||
-        url.includes('quantserve') ||
-        url.includes('scorecardresearch') ||
-        url.includes('adnxs') ||
-        url.includes('facebook') ||
-        url.includes('tiktok') ||
-        url.includes('advertising') ||
-        url.includes('adservice') ||
-        url.includes('statcounter') ||
-        url.includes('beacon')
-      ) {
-        return route.abort().catch(() => {});
+      // Block known 3rd-party ad networks and telemetry
+      if (!isFirstParty) {
+        if (
+          hostname.includes('google-analytics') ||
+          hostname.includes('googletagmanager') ||
+          hostname.includes('doubleclick') ||
+          hostname.includes('criteo') ||
+          hostname.includes('outbrain') ||
+          hostname.includes('taboola') ||
+          hostname.includes('quantserve') ||
+          hostname.includes('scorecardresearch') ||
+          hostname.includes('adnxs') ||
+          hostname.includes('facebook') ||
+          hostname.includes('tiktok') ||
+          hostname.includes('statcounter')
+        ) {
+          return route.abort().catch(() => {});
+        }
       }
 
       return route.continue().catch(() => {});
@@ -781,18 +812,29 @@ export async function fetchAccountVerificationCodeViaWebRpa(
     }
 
     stage = '等待收件箱';
-    const listLoaded = await Promise.race([
-      mailListPromise.then(() => true),
-      page.waitForTimeout(MAIL_LIST_TIMEOUT_MS).then(() => false)
-    ]);
-    if (!listLoaded && !mailListSeen) {
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline && !mailListSeen) {
+      const remaining = deadline - Date.now();
+      const loaded = await Promise.race([
+        mailListPromise.then(() => true),
+        page.waitForTimeout(Math.min(1000, remaining)).then(() => false)
+      ]);
+      if (loaded || mailListSeen) break;
+
+      const currentUrl = page.url();
+      const content = await page.content().catch(() => '');
+      if (isCaptchaPage(content)) throw new InboxMateError('CAPTCHA_TRIGGERED');
+      if (isAuthenticationFailure(currentUrl, content)) throw new InboxMateError('AUTH_FAILED');
+    }
+
+    if (!mailListSeen) {
       const content = await page.content().catch(() => '');
       if (isCaptchaPage(content)) throw new InboxMateError('CAPTCHA_TRIGGERED');
       if (isAuthenticationFailure(page.url(), content)) throw new InboxMateError('AUTH_FAILED');
       throw new InboxMateError(
         'TIMEOUT',
         400,
-        `Mail.com 登录成功后未在 ${MAIL_LIST_TIMEOUT_MS / 1000} 秒内加载收件箱。`
+        'Mail.com 登录成功后未在 30 秒内加载收件箱。'
       );
     }
 
@@ -824,5 +866,7 @@ export async function fetchAccountVerificationCodeViaWebRpa(
   } finally {
     options.signal.removeEventListener('abort', closeOnAbort);
     if (context) await context.close().catch(() => {});
+    await releaseBrowser();
   }
 }
+
