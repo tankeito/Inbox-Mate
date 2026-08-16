@@ -1831,23 +1831,54 @@ name@mail.ru----外置应用专用密码`}
             </div>
           </div>
 
+          {/* Top Full-Width Live Progress Ribbon (Shown horizontally above grid while background workers are fetching more accounts) */}
+          {isRunning && filteredEmails.length > 0 && (
+            <div className="feed-running-live-ribbon">
+              <div className="ribbon-left">
+                <span className="ribbon-live-chip">
+                  <span className="pulse-dot"></span>
+                  LIVE 并发抓取中
+                </span>
+                <span className="ribbon-accounts-status">
+                  已就绪 <strong>{stats.completedAccounts}</strong> / {stats.totalAccounts} 账号
+                  {stats.activeAccounts > 0 && (
+                    <span className="ribbon-active-pill">
+                      <LoaderCircle size={11} className="spin-fast" /> 进行中: {stats.activeAccounts}
+                    </span>
+                  )}
+                </span>
+              </div>
+
+              <div className="ribbon-center">
+                <div className="ribbon-progress-track">
+                  <div
+                    className="ribbon-progress-fill"
+                    style={{ width: `${Math.max(6, progressPercent)}%` }}
+                  >
+                    <div className="progress-shimmer-sweep"></div>
+                  </div>
+                </div>
+                <span className="ribbon-progress-percent">{progressPercent}%</span>
+              </div>
+
+              <div className="ribbon-right">
+                <span className="ribbon-metric-tag metric-mails">
+                  <Mail size={12} className="text-cyan" />
+                  <span>已捕获 <strong>{stats.totalMails}</strong> 封邮件</span>
+                </span>
+                {stats.codeMails > 0 && (
+                  <span className="ribbon-metric-tag metric-codes">
+                    <CheckCircle2 size={12} className="text-emerald" />
+                    <span>包含验证码 <strong>{stats.codeMails}</strong></span>
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Email Cards Feed Grid */}
           <div className={`feed-scroll-container view-${feedViewMode} display-${feedGroupMode}`}>
-            {/* Top Live Progress Floating Banner (Shown while background workers are fetching more accounts) */}
-            {isRunning && filteredEmails.length > 0 && (
-              <div className="feed-running-floating-banner">
-                <div className="banner-left-info">
-                  <LoaderCircle size={14} className="spin-fast text-cyan" />
-                  <span>正在后台并发拉取其余邮箱 (<strong>{stats.completedAccounts}</strong> / {stats.totalAccounts})</span>
-                </div>
-                <div className="banner-center-track">
-                  <div className="banner-progress-fill" style={{ width: `${Math.max(5, progressPercent)}%` }}></div>
-                </div>
-                <div className="banner-right-info">
-                  <span>已检出 <strong className="text-cyan">{stats.totalMails}</strong> 封邮件</span>
-                </div>
-              </div>
-            )}
+
 
             {filteredEmails.length > 0 ? (
               feedGroupMode === 'grouped' ? (

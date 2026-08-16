@@ -2217,53 +2217,160 @@ input:focus, select:focus {
   background-size: 200% 100%;
 }
 
-/* Floating Running Banner when emails already visible */
-.feed-running-floating-banner {
+/* Live Running Top Ribbon - Spans Full Width Above Email Grid */
+.feed-running-live-ribbon {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 8px 14px;
-  background: var(--bg-surface-elevated);
-  border: 1px solid rgba(14, 165, 233, 0.3);
-  border-radius: var(--radius-md);
-  margin-bottom: 12px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2), 0 0 10px var(--accent-cyan-glow);
-  font-size: 11.5px;
+  gap: 16px;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.08) 0%, rgba(16, 185, 129, 0.06) 100%);
+  border: 1px solid rgba(14, 165, 233, 0.28);
+  border-radius: var(--radius-lg);
+  margin-bottom: 16px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.2), 0 0 16px var(--accent-cyan-glow);
+  width: 100%;
+  box-sizing: border-box;
+  backdrop-filter: blur(12px);
+  animation: fadeInDown 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.banner-left-info {
+:root[data-theme="light"] .feed-running-live-ribbon {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.1) 0%, rgba(16, 185, 129, 0.08) 100%);
+  border: 1px solid rgba(14, 165, 233, 0.35);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+}
+
+.ribbon-left {
   display: flex;
   align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.ribbon-live-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  padding: 2.5px 8px;
+  border-radius: 12px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.ribbon-accounts-status {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
-  white-space: nowrap;
 }
 
-.banner-center-track {
+.ribbon-accounts-status strong {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.ribbon-active-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--accent-cyan);
+  background: rgba(14, 165, 233, 0.12);
+  border: 1px solid rgba(14, 165, 233, 0.25);
+  padding: 1.5px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.ribbon-center {
   flex: 1;
-  height: 5px;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  overflow: hidden;
-  max-width: 260px;
+  max-width: 320px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 140px;
 }
 
-:root[data-theme="light"] .banner-center-track {
+.ribbon-progress-track {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+}
+
+:root[data-theme="light"] .ribbon-progress-track {
   background: #e2e8f0;
 }
 
-.banner-progress-fill {
+.ribbon-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #0ea5e9, #10b981);
-  border-radius: 8px;
-  transition: width 0.3s ease;
+  background: linear-gradient(90deg, #0ea5e9 0%, #10b981 100%);
+  border-radius: 10px;
+  position: relative;
+  transition: width 0.35s ease;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
 }
 
-.banner-right-info {
-  white-space: nowrap;
+.ribbon-progress-percent {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--accent-cyan);
+  min-width: 32px;
+  text-align: right;
+}
+
+.ribbon-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.ribbon-metric-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 11px;
   color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
 }
+
+.ribbon-metric-tag strong {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.ribbon-metric-tag.metric-mails strong {
+  color: var(--accent-cyan);
+}
+
+.ribbon-metric-tag.metric-codes strong {
+  color: var(--accent-emerald);
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 
 /* Keyframe Animations */
 @keyframes radarPulse {
@@ -4040,17 +4147,28 @@ input:focus, select:focus {
     font-size: 9.5px;
   }
 
-  .feed-running-floating-banner {
+  .feed-running-live-ribbon {
     flex-direction: column;
     align-items: stretch;
-    gap: 6px;
-    padding: 6px 10px;
+    gap: 8px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
   }
 
-  .banner-center-track {
+  .ribbon-left {
+    justify-content: space-between;
+  }
+
+  .ribbon-center {
     max-width: 100%;
   }
+
+  .ribbon-right {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
 }
+
 
 
 /* Sidebar Clean Surface Headers & Segmented Controls */
