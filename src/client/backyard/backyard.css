@@ -883,7 +883,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-top: 18px;
+  padding: 16px 20px 20px 20px;
   flex-wrap: wrap;
   gap: 12px;
 }

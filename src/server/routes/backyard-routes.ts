@@ -8,6 +8,7 @@ import {
 import { usageLogger, getClientIp, resolveIpRegion } from '../services/usage-logger.js';
 import { diagLogger } from '../services/diag-logger.js';
 import { apiKeyService } from '../services/api-key-service.js';
+import { accessTokenService } from '../services/access-token-service.js';
 import { ipBlockService } from '../services/ip-block-service.js';
 import { getRpaStatus, restartSharedBrowser, testRpaHealthCheck } from '../engines/web-rpa-engine.js';
 
@@ -295,7 +296,7 @@ export function createBackyardRouter(): express.Router {
 
   router.post('/keys/batch-export', requireAdmin, (req: Request, res: Response) => {
     try {
-      const { keyIds, format = 'custom' } = req.body || {};
+      const { keyIds, format = 'custom', token } = req.body || {};
       const host = req.get('host') || 'localhost:3000';
       const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
       const domain = `${protocol}://${host}`;
@@ -305,7 +306,7 @@ export function createBackyardRouter(): express.Router {
         ? allKeys.filter((k) => keyIds.includes(k.id))
         : allKeys;
 
-      const formatted = apiKeyService.exportKeysFormatted(targetKeys, domain, format);
+      const formatted = apiKeyService.exportKeysFormatted(targetKeys, domain, format, typeof token === 'string' ? token : undefined);
       res.json({ formatted, count: targetKeys.length });
     } catch (err: any) {
       res.status(400).json({ error: err.message || '导出失败' });
@@ -351,8 +352,8 @@ export function createBackyardRouter(): express.Router {
       const region = resolveIpRegion(clientIp);
 
       const result = await apiKeyService.executeApiKeyFetch(apiKey, {
-        lookbackMinutes: 120,
-        maxMessages: 5,
+        lookbackMinutes: 0,
+        maxMessages: 10,
         clientIp,
         region
       });
@@ -428,6 +429,77 @@ export function createBackyardRouter(): express.Router {
       res.json(result);
     } catch (err: any) {
       res.status(400).json({ error: err.message || '自检探测失败' });
+    }
+  });
+
+  // Access Token Management Routes
+  router.get('/tokens', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const page = Number.parseInt(req.query.page as string) || 1;
+      const pageSize = Number.parseInt(req.query.pageSize as string) || 20;
+      const search = (req.query.search as string) || '';
+      const result = accessTokenService.listTokens({ page, pageSize, search });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '获取 Token 列表失败' });
+    }
+  });
+
+  router.post('/tokens', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const { name, totalQuota, durationDays } = req.body || {};
+      const token = accessTokenService.createToken({
+        name,
+        totalQuota: totalQuota ? Number(totalQuota) : 10,
+        durationDays: durationDays ? Number(durationDays) : null
+      });
+      res.json({ ok: true, token, message: '成功发行新访问 Token' });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '创建 Token 失败' });
+    }
+  });
+
+  router.post('/tokens/:id/topup', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const id = firstParam(req.params.id);
+      const count = Number(req.body?.count) || 10;
+      const token = accessTokenService.topUpQuota(id, count);
+      res.json({ ok: true, token, message: `已成功为 Token 充值 +${count} 次额度` });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '充值 Token 失败' });
+    }
+  });
+
+  router.post('/tokens/:id/toggle', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const id = firstParam(req.params.id);
+      const isActive = Boolean(req.body?.isActive);
+      const token = accessTokenService.setTokenActive(id, isActive);
+      res.json({ ok: true, token, message: isActive ? 'Token 已恢复启用' : 'Token 已冻结禁用' });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '切换状态失败' });
+    }
+  });
+
+  router.get('/tokens/:id/logs', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const id = firstParam(req.params.id);
+      const page = Number.parseInt(req.query.page as string) || 1;
+      const pageSize = Number.parseInt(req.query.pageSize as string) || 20;
+      const result = accessTokenService.getTokenLogs(id, { page, pageSize });
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '获取 Token 消耗日志失败' });
+    }
+  });
+
+  router.delete('/tokens/:id', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const id = firstParam(req.params.id);
+      const success = accessTokenService.deleteToken(id);
+      res.json({ ok: success, message: success ? 'Token 已成功删除' : '未找到该 Token' });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '删除 Token 失败' });
     }
   });
 

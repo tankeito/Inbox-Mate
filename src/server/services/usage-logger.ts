@@ -16,6 +16,8 @@ export interface UsageEvent {
   extractedCode?: string;
   durationMs: number;
   messageCount?: number;
+  tokenId?: string;
+  token?: string;
 }
 
 export interface UsageLogItem {
@@ -32,6 +34,8 @@ export interface UsageLogItem {
   extractedCode?: string;
   durationMs: number;
   messageCount: number;
+  tokenId?: string;
+  token?: string;
   createdAt: string;
 }
 
@@ -42,6 +46,8 @@ export interface UsageLogsQuery {
   status?: string;
   provider?: string;
   sourceMode?: string;
+  tokenId?: string;
+  token?: string;
   startDate?: string;
   endDate?: string;
 }
@@ -123,7 +129,8 @@ export class UsageLoggerService {
       const id = randomUUID();
       const ip = event.clientIp || '127.0.0.1';
       const region = event.region || resolveIpRegion(ip);
-      const email = event.emailAccount.trim();
+      const rawEmail = (event.emailAccount || '').trim();
+      const email = rawEmail || 'unknown@custom.com';
       const atIndex = email.lastIndexOf('@');
       const domain = atIndex > 0 ? email.slice(atIndex + 1).toLowerCase() : 'unknown';
       const masked = maskEmail(email);
@@ -133,8 +140,8 @@ export class UsageLoggerService {
         INSERT INTO usage_logs (
           id, client_ip, region, email_account, email_domain, provider,
           source_mode, status, status_detail, has_code, extracted_code,
-          duration_ms, message_count, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          duration_ms, message_count, token_id, token, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       stmt.run(
@@ -151,6 +158,8 @@ export class UsageLoggerService {
         event.extractedCode || null,
         Math.max(0, Math.round(event.durationMs || 0)),
         event.messageCount || 0,
+        event.tokenId || null,
+        event.token || null,
         now
       );
     } catch (err) {
@@ -168,8 +177,8 @@ export class UsageLoggerService {
 
     if (params.search && params.search.trim()) {
       const q = `%${params.search.trim()}%`;
-      conditions.push('(email_account LIKE ? OR client_ip LIKE ? OR region LIKE ? OR extracted_code LIKE ?)');
-      args.push(q, q, q, q);
+      conditions.push('(email_account LIKE ? OR client_ip LIKE ? OR region LIKE ? OR extracted_code LIKE ? OR token LIKE ?)');
+      args.push(q, q, q, q, q);
     }
 
     if (params.status && params.status !== 'all') {
@@ -185,6 +194,16 @@ export class UsageLoggerService {
     if (params.sourceMode && params.sourceMode !== 'all') {
       conditions.push('source_mode = ?');
       args.push(params.sourceMode);
+    }
+
+    if (params.tokenId) {
+      conditions.push('token_id = ?');
+      args.push(params.tokenId);
+    }
+
+    if (params.token) {
+      conditions.push('token = ?');
+      args.push(params.token);
     }
 
     if (params.startDate) {
@@ -228,6 +247,8 @@ export class UsageLoggerService {
       extractedCode: r.extracted_code,
       durationMs: r.duration_ms,
       messageCount: r.message_count,
+      tokenId: r.token_id || undefined,
+      token: r.token || undefined,
       createdAt: r.created_at
     }));
 
@@ -251,8 +272,9 @@ export class UsageLoggerService {
     providerStats: Array<{ provider: string; count: number; percentage: number }>;
     recentHourly: Array<{ hour: string; count: number; success: number }>;
   } {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const now = new Date();
+    // Use UTC midnight for standard ISO string comparison
+    const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
     const todayIso = todayStart.toISOString();
 
     const totalRow = db.prepare('SELECT COUNT(*) as count FROM usage_logs').get() as any;
@@ -261,7 +283,7 @@ export class UsageLoggerService {
     const todayStats = db.prepare(`
       SELECT 
         COUNT(*) as total,
-        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success,
+        SUM(CASE WHEN status IN ('success', 'no_code') THEN 1 ELSE 0 END) as success,
         SUM(CASE WHEN has_code = 1 THEN 1 ELSE 0 END) as codes,
         COUNT(DISTINCT client_ip) as ips,
         AVG(duration_ms) as avg_duration

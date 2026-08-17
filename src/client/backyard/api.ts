@@ -6,7 +6,10 @@ import type {
   DiagLogItem,
   PagedResult,
   RpaStatusData,
-  UsageLogItem
+  UsageLogItem,
+  AccessTokenItem,
+  TokenSummaryStats,
+  TokenLogsResponse
 } from './types';
 
 const BASE_URL = '/api/backyard';
@@ -189,7 +192,7 @@ export const backyardApi = {
     });
   },
 
-  async batchExportKeys(payload: { keyIds?: string[]; format: 'custom' | 'csv' | 'json' | 'urls' }) {
+  async batchExportKeys(payload: { keyIds?: string[]; format: 'custom' | 'csv' | 'json' | 'urls'; token?: string }) {
     return request<{ formatted: string; count: number }>('/keys/batch-export', {
       method: 'POST',
       body: JSON.stringify(payload)
@@ -258,5 +261,55 @@ export const backyardApi = {
     }>('/rpa/health-check', {
       method: 'POST'
     });
+  },
+
+  // Access Token Generator & Management
+  async getTokens(params?: { page?: number; pageSize?: number; search?: string }) {
+    const searchParams = new URLSearchParams();
+    if (params?.page) searchParams.set('page', params.page.toString());
+    if (params?.pageSize) searchParams.set('pageSize', params.pageSize.toString());
+    if (params?.search) searchParams.set('search', params.search);
+    return request<{
+      items: AccessTokenItem[];
+      total: number;
+      page: number;
+      pageSize: number;
+      totalPages: number;
+      summary: TokenSummaryStats;
+    }>(`/tokens?${searchParams.toString()}`);
+  },
+
+  async createToken(payload: { name: string; totalQuota?: number; durationDays?: number | null }) {
+    return request<{ ok: boolean; token: AccessTokenItem; message: string }>('/tokens', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async topUpToken(id: string, count: number) {
+    return request<{ ok: boolean; token: AccessTokenItem; message: string }>(`/tokens/${id}/topup`, {
+      method: 'POST',
+      body: JSON.stringify({ count })
+    });
+  },
+
+  async toggleTokenActive(id: string, isActive: boolean) {
+    return request<{ ok: boolean; token: AccessTokenItem; message: string }>(`/tokens/${id}/toggle`, {
+      method: 'POST',
+      body: JSON.stringify({ isActive })
+    });
+  },
+
+  async deleteToken(id: string) {
+    return request<{ ok: boolean; message: string }>(`/tokens/${id}`, {
+      method: 'DELETE'
+    });
+  },
+
+  async getTokenLogs(id: string, params?: { page?: number; pageSize?: number }) {
+    const searchParams = new URLSearchParams();
+    if (params?.page) searchParams.set('page', params.page.toString());
+    if (params?.pageSize) searchParams.set('pageSize', params.pageSize.toString());
+    return request<TokenLogsResponse>(`/tokens/${id}/logs?${searchParams.toString()}`);
   }
 };

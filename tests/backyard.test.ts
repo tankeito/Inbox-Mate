@@ -147,7 +147,7 @@ describe('Backyard Management & API Engine', () => {
       const formatted = apiKeyService.exportKeysFormatted(list.items, 'http://localhost:3000', 'custom');
       expect(formatted).toContain('账号: anais_officiavhr@mail.com');
       expect(formatted).toContain('密码: oL9KZDccB');
-      expect(formatted).toContain('API：http://localhost:3000/im_');
+      expect(formatted).toContain('API：http://localhost:3000/api/im_');
     });
   });
 

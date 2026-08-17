@@ -284,7 +284,7 @@ export const DiagnosticsView: React.FC = () => {
         )}
 
         {/* Pagination Bar */}
-        <div className="by-pagination" style={{ padding: '16px 20px', borderTop: '1px solid var(--by-border)' }}>
+        <div className="by-pagination" style={{ padding: '16px 20px 24px 20px', borderTop: '1px solid var(--by-border)' }}>
           <div className="by-pagination-info">
             共 <span style={{ fontWeight: 700, color: 'var(--by-text-primary)' }}>{total}</span> 条日志 • 第 {page} / {totalPages} 页
           </div>

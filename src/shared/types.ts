@@ -79,6 +79,7 @@ export interface CreateJobInput {
   accounts: AccountInput[];
   lookbackMinutes: number;
   maxMessagesPerAccount: number;
+  token?: string;
 }
 
 export interface CodeMatch {

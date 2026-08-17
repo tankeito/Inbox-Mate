@@ -3,6 +3,7 @@ import {
   Activity,
   CheckCircle2,
   Key,
+  KeyRound,
   ShieldCheck,
   Zap,
   Clock,
@@ -300,6 +301,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
                 <div>
                   <div style={{ fontWeight: 600, fontSize: '0.92rem', color: 'var(--by-text-primary)' }}>Chrome RPA 状态与运维中枢</div>
                   <div style={{ fontSize: '0.78rem', color: 'var(--by-text-secondary)' }}>实时并发监控、手动安全重启与连通性自检</div>
+                </div>
+              </div>
+              <ArrowUpRight size={18} color="var(--by-text-muted)" />
+            </div>
+
+            <div
+              onClick={() => onNavigate('tokens')}
+              style={{
+                padding: '14px',
+                borderRadius: '10px',
+                background: 'var(--by-bg-input)',
+                border: '1px solid var(--by-border)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '8px', background: 'rgba(236, 72, 153, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ec4899' }}>
+                  <KeyRound size={18} />
+                </div>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: '0.92rem', color: 'var(--by-text-primary)' }}>API 授权 Token 与额度生成器</div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--by-text-secondary)' }}>发行消费令牌、成功扣次、失败免扣、防恶意挤兑</div>
                 </div>
               </div>
               <ArrowUpRight size={18} color="var(--by-text-muted)" />

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { InboxMateError } from './errors.js';
-import { normalizeEmail, providerForEmail } from './providers.js';
+import { normalizeEmail, providerForEmail, PROVIDER_REGISTRY } from './providers.js';
 import type { AccountInput, CreateJobInput, ProviderId } from '../shared/types.js';
 
 const providerSchema = z.enum([
@@ -42,7 +42,8 @@ const createJobSchema = z
   .object({
     accounts: z.array(accountSchema).min(1).max(50),
     lookbackMinutes: z.number().int().min(0).max(525600).default(0),
-    maxMessagesPerAccount: z.number().int().min(1).max(100).default(15)
+    maxMessagesPerAccount: z.number().int().min(1).max(100).default(15),
+    token: z.string().optional()
   })
   .strict();
 
@@ -86,10 +87,27 @@ export function parseCreateJobInput(body: unknown): CreateJobInput {
     throw new InboxMateError('BAD_REQUEST', 400, '队列中没有有效的邮箱账户');
   }
 
+  // Check Mail.com batch prohibition (unless authorized with token)
+  if (accounts.length > 1) {
+    const hasMailCom = accounts.some((acc) => {
+      const domain = acc.email.split('@')[1]?.toLowerCase() || '';
+      return (
+        acc.provider === 'mailcom' ||
+        domain.endsWith('mail.com') ||
+        domain.endsWith('cheerful.com') ||
+        (PROVIDER_REGISTRY.mailcom.domains as readonly string[]).includes(domain)
+      );
+    });
+    if (hasMailCom && !result.data.token) {
+      throw new InboxMateError('BAD_REQUEST', 400, '批量导入不支持mail.com邮箱，请使用单账号添加功能');
+    }
+  }
+
   return {
     accounts,
     lookbackMinutes: result.data.lookbackMinutes,
-    maxMessagesPerAccount: result.data.maxMessagesPerAccount
+    maxMessagesPerAccount: result.data.maxMessagesPerAccount,
+    token: result.data.token
   };
 }
 

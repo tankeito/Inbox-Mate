@@ -65,4 +65,58 @@ describe('parseCreateJobInput', () => {
       })
     ).toThrowError(/授权/);
   });
+
+  it('rejects batch processing (>1 account) when Mail.com / Cheerful account is included without token', () => {
+    const batchWithMailCom = {
+      ...base,
+      accounts: [
+        {
+          clientAccountId: 'account-1',
+          email: 'user1@gmx.com',
+          provider: 'gmx',
+          auth: { type: 'app_password', secret: 'pass1' }
+        },
+        {
+          clientAccountId: 'account-2',
+          email: 'rozella.hermann@cheerful.com',
+          provider: 'mailcom',
+          auth: { type: 'app_password', secret: 'pass2' }
+        }
+      ]
+    };
+    expect(() => parseCreateJobInput(batchWithMailCom)).toThrowError(/批量导入不支持mail.com/);
+  });
+
+  it('allows batch processing (>1 account) when Mail.com account is included WITH token', () => {
+    const batchWithToken = {
+      ...base,
+      token: 'tok_valid_token_123',
+      accounts: [
+        {
+          clientAccountId: 'account-1',
+          email: 'user1@gmx.com',
+          provider: 'gmx',
+          auth: { type: 'app_password', secret: 'pass1' }
+        },
+        {
+          clientAccountId: 'account-2',
+          email: 'rozella.hermann@cheerful.com',
+          provider: 'mailcom',
+          auth: { type: 'app_password', secret: 'pass2' }
+        }
+      ]
+    };
+    const parsed = parseCreateJobInput(batchWithToken);
+    expect(parsed.accounts.length).toBe(2);
+    expect(parsed.token).toBe('tok_valid_token_123');
+  });
+
+  it('accepts optional token in job input', () => {
+    const inputWithToken = {
+      ...base,
+      token: 'tok_test1234567890'
+    };
+    const parsed = parseCreateJobInput(inputWithToken);
+    expect(parsed.token).toBe('tok_test1234567890');
+  });
 });

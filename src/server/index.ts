@@ -11,6 +11,7 @@ import { MicrosoftOAuthService } from './microsoft-oauth.js';
 import { oauthStartSchema, parseCreateJobInput } from './validation.js';
 import { createBackyardRouter } from './routes/backyard-routes.js';
 import { apiKeyService } from './services/api-key-service.js';
+import { accessTokenService } from './services/access-token-service.js';
 import { getClientIp, resolveIpRegion } from './services/usage-logger.js';
 
 const HOST = '127.0.0.1';
@@ -158,8 +159,9 @@ export function createServer(port = PORT) {
 
     const clientIp = getClientIp(req);
     const region = resolveIpRegion(clientIp);
-    const lookback = Number.parseInt(req.query.lookback as string) || 60;
-    const max = Number.parseInt(req.query.max as string) || 5;
+    const lookbackParam = req.query.lookback as string | undefined;
+    const lookback = lookbackParam !== undefined ? (Number.parseInt(lookbackParam, 10) || 0) : 0;
+    const max = Number.parseInt(req.query.max as string) || 10;
     const format = (req.query.format as string) || 'json';
 
     // IP Block Check
@@ -178,6 +180,39 @@ export function createServer(port = PORT) {
       return;
     }
 
+    // Token Extraction (URL Query ?token=tok_xxx, Header X-Access-Token, or Bearer token)
+    let tokenStr = typeof req.query.token === 'string' ? req.query.token.trim() : '';
+    if (!tokenStr && typeof req.headers['x-access-token'] === 'string') {
+      tokenStr = req.headers['x-access-token'].trim();
+    }
+    if (!tokenStr && typeof req.headers['authorization'] === 'string') {
+      const auth = req.headers['authorization'].trim();
+      if (auth.toLowerCase().startsWith('bearer ')) {
+        tokenStr = auth.slice(7).trim();
+      }
+    }
+
+    let verifiedToken: any = null;
+    if (tokenStr) {
+      const verifyResult = accessTokenService.verifyTokenAccess(tokenStr);
+      if (!verifyResult.valid) {
+        if (format === 'code' || format === 'text') {
+          res.status(403).setHeader('Content-Type', 'text/plain; charset=utf-8').send(`TOKEN_ERROR: ${verifyResult.reason}`);
+          return;
+        }
+        res.status(403).json({
+          code: 403,
+          success: false,
+          error: 'TOKEN_INVALID_OR_EXHAUSTED',
+          message: verifyResult.reason,
+          token: tokenStr,
+          queriedAt: new Date().toISOString()
+        });
+        return;
+      }
+      verifiedToken = verifyResult.token;
+    }
+
     try {
       const result = await apiKeyService.executeApiKeyFetch(apiKey, {
         lookbackMinutes: lookback,
@@ -185,6 +220,17 @@ export function createServer(port = PORT) {
         clientIp,
         region
       });
+
+      // Post-execution quota deduction (Deduct ONLY when fetch succeeds!)
+      if (verifiedToken) {
+        accessTokenService.consumeQuota(verifiedToken.id);
+        (result as any).tokenInfo = {
+          name: verifiedToken.name,
+          usedQuota: verifiedToken.usedQuota + 1,
+          totalQuota: verifiedToken.totalQuota,
+          remainingQuota: Math.max(0, verifiedToken.remainingQuota - 1)
+        };
+      }
 
       if (format === 'code' || format === 'text') {
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -206,6 +252,16 @@ export function createServer(port = PORT) {
       });
     }
   }
+
+  // Standard API Routes
+  app.get('/api/:apiKey', (req, res, next) => {
+    const apiKey = firstParam(req.params.apiKey);
+    if (!apiKey || RESERVED_ROOT_PATHS.has(apiKey.toLowerCase()) || !/^[a-zA-Z0-9_-]{16,64}$/.test(apiKey)) {
+      next();
+      return;
+    }
+    void handlePublicApiKeyFetch(req, res);
+  });
 
   app.get('/api/public/:apiKey', (req, res) => void handlePublicApiKeyFetch(req, res));
 
@@ -244,14 +300,43 @@ export function createServer(port = PORT) {
     }
   });
 
-  app.get('/api/v1/oauth/microsoft/callback', (req, res) => void oauth.handleCallback(req, res));
+  app.get('/api/v1/token/info', (req, res) => {
+    const tokenStr = (req.query.token as string) || req.get('x-access-token') || '';
+    if (!tokenStr) {
+      res.status(400).json({ valid: false, error: '请提供 Token 参数' });
+      return;
+    }
+    const check = accessTokenService.verifyTokenAccess(tokenStr);
+    if (!check.valid || !check.token) {
+      res.json({
+        valid: false,
+        error: check.reason || 'Token 无效或已用尽',
+        token: tokenStr
+      });
+      return;
+    }
+    res.json({
+      valid: true,
+      token: check.token.token,
+      name: check.token.name,
+      totalQuota: check.token.totalQuota,
+      usedQuota: check.token.usedQuota,
+      remainingQuota: check.token.remainingQuota,
+      isExhausted: check.token.isExhausted,
+      expiresAt: check.token.expiresAt
+    });
+  });
 
   app.post('/api/v1/jobs', requireSession({ csrf: true }), checkIpBlocked, (req, res, next) => {
     try {
       const input = parseCreateJobInput(req.body);
+      const headerToken = req.get('x-access-token') || (req.query.token as string);
+      if (!input.token && headerToken) {
+        input.token = headerToken;
+      }
       const clientIp = getClientIp(req);
       const region = resolveIpRegion(clientIp);
-      const job = jobs.create(input, { clientIp, region });
+      const job = jobs.create(input, { clientIp, region, token: input.token });
       res.status(202).json({ jobId: job.jobId, state: job.state });
     } catch (error) {
       next(error);

@@ -235,7 +235,36 @@ async function getSharedBrowser(): Promise<Browser> {
   return browserPromise;
 }
 
+const MAX_CONCURRENT_RPA = 3;
+const rpaWaitQueue: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
+
 async function acquireBrowser(): Promise<Browser> {
+  if (activeRunningAccounts >= MAX_CONCURRENT_RPA) {
+    diagLogger.info(
+      'web_rpa',
+      '并发排队',
+      `当前并发数 (${activeRunningAccounts}/${MAX_CONCURRENT_RPA}) 已满，任务进入排队队列 (排队中: ${rpaWaitQueue.length + 1})`
+    );
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = rpaWaitQueue.findIndex((item) => item.resolve === resolve);
+        if (idx >= 0) rpaWaitQueue.splice(idx, 1);
+        reject(new InboxMateError('TIMEOUT', 504, '服务器并发任务较多，排队等待超时，请稍后重试'));
+      }, 35_000);
+
+      rpaWaitQueue.push({
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        }
+      });
+    });
+  }
+
   activeRunningAccounts += 1;
   browserUsageCount += 1;
   return getSharedBrowser();
@@ -243,6 +272,12 @@ async function acquireBrowser(): Promise<Browser> {
 
 async function releaseBrowser(): Promise<void> {
   activeRunningAccounts = Math.max(0, activeRunningAccounts - 1);
+
+  if (rpaWaitQueue.length > 0 && activeRunningAccounts < MAX_CONCURRENT_RPA) {
+    const nextTask = rpaWaitQueue.shift();
+    if (nextTask) nextTask.resolve();
+  }
+
   if (activeRunningAccounts === 0 && browserUsageCount >= MAX_BROWSER_RECYCLE_USAGE) {
     await closeSharedBrowser();
   }
@@ -685,11 +720,15 @@ export function selectMailComMessages(
   mails: CapturedMailPayload[],
   options: Pick<FetchAccountOptions, 'lookbackMinutes' | 'maxMessages'>
 ): CapturedMailPayload[] {
-  const threshold = options.lookbackMinutes > 0 ? Date.now() - options.lookbackMinutes * 60_000 : undefined;
+  const max = typeof options.maxMessages === 'number' && options.maxMessages > 0 ? options.maxMessages : 10;
+  const threshold = options.lookbackMinutes && options.lookbackMinutes > 0
+    ? Date.now() - options.lookbackMinutes * 60_000
+    : undefined;
+
   return mails
     .filter((mail) => threshold === undefined || mail.receivedAt.getTime() >= threshold)
     .sort((left, right) => right.receivedAt.getTime() - left.receivedAt.getTime())
-    .slice(0, Math.max(0, options.maxMessages));
+    .slice(0, max);
 }
 
 function mapResult(account: AccountInput, mails: CapturedMailPayload[]): FetchAccountResult {

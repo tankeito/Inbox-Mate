@@ -214,6 +214,12 @@ const providerDomains: Record<Provider, readonly string[]> = {
   custom: [],
 };
 
+const isMailComRelatedEmail = (email: string): boolean => {
+  const domain = email.split('@')[1]?.toLowerCase().trim() || '';
+  const mailcomDomains = providerDomains.mailcom;
+  return mailcomDomains.includes(domain) || domain.endsWith('mail.com') || domain.endsWith('cheerful.com');
+};
+
 const statusDetails: Record<
   AccountStatus,
   { label: string; tone: 'neutral' | 'working' | 'success' | 'warning' | 'danger' }
@@ -444,6 +450,59 @@ export function App() {
   // Feed Pagination State
   const [feedPage, setFeedPage] = useState(1);
   const [feedPageSize, setFeedPageSize] = useState(12);
+
+  // Access Token for Authorized Front Workbench Access
+  const [accessToken, setAccessToken] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    const urlParam = new URLSearchParams(window.location.search).get('token');
+    if (urlParam) {
+      sessionStorage.setItem('inbox_mate_token', urlParam);
+      return urlParam;
+    }
+    return sessionStorage.getItem('inbox_mate_token') || '';
+  });
+  const [tokenInfo, setTokenInfo] = useState<{
+    valid: boolean;
+    token: string;
+    name: string;
+    totalQuota: number;
+    usedQuota: number;
+    remainingQuota: number;
+    isExhausted: boolean;
+    expiresAt: string | null;
+    error?: string;
+  } | null>(null);
+
+  const fetchTokenInfo = useCallback(async (tokenStr: string) => {
+    if (!tokenStr) return;
+    try {
+      const res = await fetch(`/api/v1/token/info?token=${encodeURIComponent(tokenStr)}`);
+      const data = await res.json();
+      if (data && data.valid) {
+        setTokenInfo(data);
+      } else {
+        setTokenInfo({
+          valid: false,
+          token: tokenStr,
+          name: '无效或已耗尽令牌',
+          totalQuota: 0,
+          usedQuota: 0,
+          remainingQuota: 0,
+          isExhausted: true,
+          expiresAt: null,
+          error: data?.error || 'Token 无效或额度已用尽'
+        });
+      }
+    } catch {
+      // Ignore network errors
+    }
+  }, []);
+
+  useEffect(() => {
+    if (accessToken) {
+      void fetchTokenInfo(accessToken);
+    }
+  }, [accessToken, fetchTokenInfo]);
 
   const csrfTokenRef = useRef<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -739,6 +798,20 @@ export function App() {
       return;
     }
 
+    // Check if batch text contains Mail.com domains (allowed when authorized with Token)
+    const hasMailCom = result.accounts.some((acc) => isMailComRelatedEmail(acc.email) || acc.provider === 'mailcom');
+    const hasTokenAccess = Boolean(accessToken && (!tokenInfo || tokenInfo.valid !== false));
+
+    if (hasMailCom && !hasTokenAccess) {
+      notify('error', '批量导入不支持mail.com邮箱，请使用单账号添加功能');
+      return;
+    }
+
+    if (hasMailCom && accessToken && tokenInfo && tokenInfo.remainingQuota <= 0) {
+      notify('error', '当前 Token 额度已耗尽，请联系管理员充值后再使用。');
+      return;
+    }
+
     let microsoftCount = 0;
     const known = new Set(accounts.map((account) => accountKey(account.email)));
     const newAccounts: Account[] = [];
@@ -933,10 +1006,16 @@ export function App() {
             applyJobSnapshot(data as ApiJobSnapshot);
           } else if (event.type === 'account.updated') {
             applyAccountSnapshot(data as ApiAccountSnapshot);
+            if (accessToken) {
+              void fetchTokenInfo(accessToken);
+            }
           } else if (event.type === 'job.completed') {
             closeEventStream();
             setJobId(null);
             setIsCancelling(false);
+            if (accessToken) {
+              void fetchTokenInfo(accessToken);
+            }
             const state = stringValue((data as ApiJobSnapshot).state)?.toLowerCase();
             notify(
               state === 'cancelled' ? 'info' : 'success',
@@ -954,11 +1033,14 @@ export function App() {
           closeEventStream();
           setJobId(null);
           setIsCancelling(false);
+          if (accessToken) {
+            void fetchTokenInfo(accessToken);
+          }
           notify('error', '本地服务连接在任务结束前中断');
         }
       };
     },
-    [applyAccountSnapshot, applyJobSnapshot, closeEventStream, notify],
+    [accessToken, applyAccountSnapshot, applyJobSnapshot, closeEventStream, fetchTokenInfo, notify],
   );
 
   const pollMicrosoftStatus = useCallback(
@@ -1063,6 +1145,21 @@ export function App() {
       return;
     }
 
+    // Check mail.com batch authorization
+    const hasMailCom = accounts.some((acc) => isMailComRelatedEmail(acc.email) || acc.provider === 'mailcom');
+    const hasTokenAccess = Boolean(accessToken && (!tokenInfo || tokenInfo.valid !== false));
+
+    if (accounts.length > 1 && hasMailCom && !hasTokenAccess) {
+      notify('error', '批量导入不支持mail.com邮箱，请使用单账号添加功能');
+      return;
+    }
+
+    // Check token quota if Mail.com is requested
+    if (hasMailCom && accessToken && tokenInfo && tokenInfo.remainingQuota <= 0) {
+      notify('error', '当前 Token 额度已耗尽，请联系管理员充值后再使用。');
+      return;
+    }
+
     // Precise Password Validation
     const missingSecretAccount = accounts.find((acc) => acc.provider !== 'microsoft' && !acc.refreshToken && !acc.secret.trim());
     if (missingSecretAccount) {
@@ -1088,7 +1185,7 @@ export function App() {
       })),
     );
     try {
-      const token = await loadSession();
+      const csrf = await loadSession();
       const response = await fetch('/api/v1/jobs', {
         method: 'POST',
         cache: 'no-store',
@@ -1096,7 +1193,8 @@ export function App() {
           'Content-Type': 'application/json',
           Accept: 'application/json',
           'Cache-Control': 'no-store',
-          'X-Inbox-Mate-CSRF': token,
+          'X-Inbox-Mate-CSRF': csrf,
+          ...(accessToken ? { 'X-Access-Token': accessToken } : {}),
         },
         body: JSON.stringify({
           accounts: accounts.map((account) => ({
@@ -1115,15 +1213,23 @@ export function App() {
           })),
           lookbackMinutes,
           maxMessagesPerAccount,
+          token: accessToken || undefined,
         }),
       });
       const responseBody = (await response.json().catch(() => null)) as Record<string, unknown> | null;
       const nextJobId = stringValue(responseBody?.jobId);
       if (!response.ok || !nextJobId) {
-        if (responseBody?.code === 'IP_BLOCKED' || (typeof responseBody?.error === 'string' && responseBody.error.includes('限制访问'))) {
-          const blockMsg = typeof responseBody.error === 'string' ? responseBody.error : '您的 IP 已被系统管理员限制访问，如有疑问请联系客服或管理员。';
-          notify('error', `🚫 访问受限: ${blockMsg}`);
-          throw new Error(blockMsg);
+        if (response.status === 403) {
+          if (responseBody?.code === 'IP_BLOCKED' || (typeof responseBody?.error === 'string' && responseBody.error.includes('限制访问'))) {
+            const blockMsg = typeof responseBody.error === 'string' ? responseBody.error : '您的 IP 已被系统管理员限制访问，如有疑问请联系客服或管理员。';
+            notify('error', `🚫 访问受限: ${blockMsg}`);
+            throw new Error(blockMsg);
+          }
+          if (responseBody?.code === 'AUTH_FAILED' || (typeof responseBody?.error === 'string' && responseBody.error.includes('Token'))) {
+            const tokenMsg = '当前 Token 额度已耗尽或无效，请联系管理员充值后再使用。';
+            notify('error', `🚫 ${tokenMsg}`);
+            throw new Error(tokenMsg);
+          }
         }
         const errObj = responseBody?.error as Record<string, unknown> | undefined;
         const serverError = stringValue(errObj?.message) || stringValue(errObj?.code) || (typeof responseBody?.error === 'string' ? responseBody.error : '');
@@ -1132,7 +1238,7 @@ export function App() {
 
       setJobId(nextJobId);
       openEventStream(nextJobId);
-      notify('success', `已启动 批量邮件读取 (${accounts.length} 个邮箱)`);
+      notify('success', `已启动 邮件读取任务 (${accounts.length} 个邮箱)`);
     } catch (err) {
       setAccounts((current) => current.map((account) => ({ ...account, status: 'draft' })));
       notify('error', err instanceof Error ? err.message : '无法启动邮件抓取任务');
@@ -1202,6 +1308,27 @@ export function App() {
             <span className="stat-label">包含验证码</span>
             <span className="stat-value highlight-emerald">{stats.codeMails} 个</span>
           </div>
+          {accessToken && (
+            <div
+              className="stat-pill"
+              style={{
+                background: tokenInfo?.remainingQuota === 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                borderColor: tokenInfo?.remainingQuota === 0 ? 'rgba(239, 68, 68, 0.35)' : 'rgba(16, 185, 129, 0.35)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+              title={`授权 Token: ${accessToken}\n总额度: ${tokenInfo?.totalQuota ?? '-'} 次\n已用: ${tokenInfo?.usedQuota ?? '-'} 次\n剩余: ${tokenInfo?.remainingQuota ?? '-'} 次`}
+            >
+              <KeyRound size={13} style={{ color: tokenInfo?.remainingQuota === 0 ? '#ef4444' : '#10b981' }} />
+              <span className="stat-label" style={{ color: tokenInfo?.remainingQuota === 0 ? '#ef4444' : '#10b981' }}>
+                {tokenInfo?.name || '访问令牌'}
+              </span>
+              <span className="stat-value" style={{ color: tokenInfo?.remainingQuota === 0 ? '#ef4444' : '#10b981', fontWeight: 700 }}>
+                {tokenInfo ? `${tokenInfo.remainingQuota} 次` : '校验中...'}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="topbar-actions">

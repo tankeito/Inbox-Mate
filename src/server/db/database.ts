@@ -2,8 +2,25 @@ import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+function getProjectDataDir(): string {
+  if (process.env.DATA_DIR && process.env.DATA_DIR.trim()) {
+    return path.resolve(process.env.DATA_DIR.trim());
+  }
+  const cwdData = path.resolve(process.cwd(), 'data');
+  if (existsSync(path.resolve(process.cwd(), 'package.json')) || existsSync(cwdData)) {
+    return cwdData;
+  }
+  try {
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    return path.resolve(__dirname, '../../../data');
+  } catch {
+    return cwdData;
+  }
+}
+
+const DATA_DIR = getProjectDataDir();
 if (!existsSync(DATA_DIR)) {
   mkdirSync(DATA_DIR, { recursive: true });
 }
@@ -69,6 +86,8 @@ class DatabaseService {
         extracted_code TEXT,
         duration_ms INTEGER NOT NULL DEFAULT 0,
         message_count INTEGER NOT NULL DEFAULT 0,
+        token_id TEXT,
+        token TEXT,
         created_at TEXT NOT NULL
       );
 
@@ -130,7 +149,35 @@ class DatabaseService {
       );
 
       CREATE INDEX IF NOT EXISTS idx_blocked_ips_ip ON blocked_ips(ip);
+
+      CREATE TABLE IF NOT EXISTS access_tokens (
+        id TEXT PRIMARY KEY,
+        token TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        total_quota INTEGER NOT NULL DEFAULT 10,
+        used_quota INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        expires_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_access_tokens_token ON access_tokens(token);
+      CREATE INDEX IF NOT EXISTS idx_access_tokens_active ON access_tokens(is_active);
     `);
+
+    // Column migrations
+    try {
+      const columns = (this.db.prepare('PRAGMA table_info(usage_logs)').all() as any[]).map((c) => c.name);
+      if (!columns.includes('token_id')) {
+        this.db.exec('ALTER TABLE usage_logs ADD COLUMN token_id TEXT;');
+      }
+      if (!columns.includes('token')) {
+        this.db.exec('ALTER TABLE usage_logs ADD COLUMN token TEXT;');
+      }
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_usage_logs_token_id ON usage_logs(token_id);');
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_usage_logs_token ON usage_logs(token);');
+    } catch {}
   }
 
   private initDefaultAdmin() {

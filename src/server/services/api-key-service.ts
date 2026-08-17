@@ -89,6 +89,9 @@ export interface ApiKeyPublicResult {
     from: string;
     receivedAt: string;
     snippet: string;
+    body?: string;
+    textBody?: string;
+    htmlBody?: string;
     hasCode: boolean;
     extractedCode?: string;
   }>;
@@ -331,12 +334,16 @@ export class ApiKeyService {
   public exportKeysFormatted(
     keys: ApiKeyItem[],
     domain: string,
-    format: 'custom' | 'csv' | 'json' | 'urls'
+    format: 'custom' | 'csv' | 'json' | 'urls',
+    token?: string
   ): string {
     const baseUrl = domain.startsWith('http') ? domain : `https://${domain}`;
+    const tokenQuery = token && token.trim() ? `?token=${encodeURIComponent(token.trim())}` : '';
+
+    const buildUrl = (apiKey: string) => `${baseUrl}/api/${apiKey}${tokenQuery}`;
 
     if (format === 'urls') {
-      return keys.map((k) => `${baseUrl}/${k.apiKey}`).join('\n');
+      return keys.map((k) => buildUrl(k.apiKey)).join('\n');
     }
 
     if (format === 'json') {
@@ -345,7 +352,7 @@ export class ApiKeyService {
           email: k.accountEmail,
           provider: k.provider,
           apiKey: k.apiKey,
-          apiUrl: `${baseUrl}/${k.apiKey}`,
+          apiUrl: buildUrl(k.apiKey),
           status: !k.isActive ? 'disabled' : k.expiresAt && new Date(k.expiresAt) <= new Date() ? 'expired' : 'active',
           expiresAt: k.expiresAt,
           calls: k.callCount
@@ -371,7 +378,7 @@ export class ApiKeyService {
           `"${rawPass}"`,
           `"${k.provider}"`,
           `"${k.apiKey}"`,
-          `"${baseUrl}/${k.apiKey}"`,
+          `"${buildUrl(k.apiKey)}"`,
           `"${!k.isActive ? '已禁用' : k.expiresAt && new Date(k.expiresAt) <= new Date() ? '已过期' : '生效中'}"`,
           `"${k.expiresAt || '永久有效'}"`,
           k.callCount
@@ -380,7 +387,7 @@ export class ApiKeyService {
       return [headers.join(','), ...rows].join('\r\n');
     }
 
-    // Format: 账号: anais_officiavhr@mail.com | 密码: oL9KZDccB | API：https://域名/{api key}
+    // Format: 账号: anais_officiavhr@mail.com | 密码: oL9KZDccB | API：https://域名/api/{apiKey}?token={token}
     const lines = keys.map((k) => {
       let rawPass = '';
       try {
@@ -390,7 +397,7 @@ export class ApiKeyService {
           rawPass = decrypted.password || '';
         }
       } catch {}
-      return `账号: ${k.accountEmail} | 密码: ${rawPass} | API：${baseUrl}/${k.apiKey}`;
+      return `账号: ${k.accountEmail} | 密码: ${rawPass} | API：${buildUrl(k.apiKey)}`;
     });
 
     return lines.join('\n');
@@ -467,8 +474,8 @@ export class ApiKeyService {
 
     try {
       const fetchResult = await fetchAccountVerificationCode(accountInput, {
-        lookbackMinutes: options.lookbackMinutes || 60,
-        maxMessages: options.maxMessages || 5,
+        lookbackMinutes: typeof options.lookbackMinutes === 'number' ? options.lookbackMinutes : 0,
+        maxMessages: typeof options.maxMessages === 'number' && options.maxMessages > 0 ? options.maxMessages : 10,
         signal: controller.signal,
         onProgress: (state) => {
           diagLogger.debug('api', `进度: ${state}`, `正在执行 ${state}`, undefined, email);
@@ -523,6 +530,9 @@ export class ApiKeyService {
           from: m.from,
           receivedAt: m.receivedAt,
           snippet: m.snippet,
+          body: m.textBody || m.snippet || '',
+          textBody: m.textBody || m.snippet || '',
+          htmlBody: m.htmlBody || undefined,
           hasCode: Boolean(m.codeMatch),
           extractedCode: m.codeMatch?.code
         })),

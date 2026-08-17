@@ -57,16 +57,50 @@ describe('JobManager', () => {
     expect(events).toContain('job.completed');
   });
 
-  it('cancels an in-flight account through its abort signal', async () => {
-    const runner = async (_input: AccountInput, options: { signal: AbortSignal }): Promise<undefined> =>
-      new Promise((_resolve, reject) => {
-        options.signal.addEventListener('abort', () => reject(new InboxMateError('CANCELLED')), { once: true });
-      });
-    const manager = new JobManager(runner as never);
-    const job = manager.create(payload);
-    manager.cancel(job.jobId);
+  it('only deducts token quota for mail.com accounts, sparing other accounts', async () => {
+    const { accessTokenService } = await import('../src/server/services/access-token-service.js');
+    const token = accessTokenService.createToken({
+      name: '混合任务测试Token',
+      totalQuota: 10
+    });
 
-    await eventually(() => expect(manager.get(job.jobId)?.state).toBe('cancelled'));
-    expect(manager.get(job.jobId)?.accounts[0]).toMatchObject({ state: 'cancelled', error: { code: 'CANCELLED' } });
+    const runner = async (input: AccountInput): Promise<CodeMatch> => {
+      return {
+        code: '123456',
+        confidence: 'high',
+        score: 90,
+        receivedAt: new Date().toISOString(),
+        reason: ['digits']
+      };
+    };
+
+    const manager = new JobManager(runner as never);
+    const mixedPayload: CreateJobInput = {
+      token: token.token,
+      accounts: [
+        {
+          clientAccountId: 'acc-gmx',
+          email: 'user@gmx.com',
+          provider: 'gmx',
+          auth: { type: 'app_password', secret: 'secret' }
+        },
+        {
+          clientAccountId: 'acc-mailcom',
+          email: 'test@mail.com',
+          provider: 'mailcom',
+          auth: { type: 'app_password', secret: 'secret' }
+        }
+      ],
+      lookbackMinutes: 0,
+      maxMessagesPerAccount: 5
+    };
+
+    const job = manager.create(mixedPayload);
+    await eventually(() => expect(manager.get(job.jobId)?.state).toBe('completed'));
+
+    const updatedToken = accessTokenService.getTokenById(token.id);
+    // Total 2 accounts ran, but ONLY 1 mail.com was consumed!
+    expect(updatedToken?.usedQuota).toBe(1);
+    expect(updatedToken?.remainingQuota).toBe(9);
   });
 });

@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   FileText,
   Key,
+  KeyRound,
   Activity,
   Settings,
   LogOut,
@@ -22,6 +23,7 @@ import { LoginView } from './views/LoginView';
 import { DashboardView } from './views/DashboardView';
 import { UsageLogsView } from './views/UsageLogsView';
 import { ApiKeyView } from './views/ApiKeyView';
+import { TokensView } from './views/TokensView';
 import { RpaStatusView } from './views/RpaStatusView';
 import { DiagnosticsView } from './views/DiagnosticsView';
 import { SettingsView } from './views/SettingsView';
@@ -30,6 +32,7 @@ import './backyard.css';
 
 function getInitialTabFromUrl(): string {
   const path = window.location.pathname;
+  if (path.includes('/backyard/tokens')) return 'tokens';
   if (path.includes('/backyard/logs')) return 'logs';
   if (path.includes('/backyard/keys')) return 'keys';
   if (path.includes('/backyard/rpa')) return 'rpa';
@@ -68,17 +71,6 @@ export const BackyardApp: React.FC = () => {
   }, [themeMode]);
 
   useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        setLoading(true);
-        const res = await backyardApi.getMe();
-        setUser(res.user);
-      } catch {
-        setUser(null);
-      } finally {
-        setLoading(false);
-      }
-    };
     checkAuth();
 
     const handlePopState = () => {
@@ -88,31 +80,47 @@ export const BackyardApp: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  const navigateTo = (tab: string) => {
-    setActiveTab(tab);
-    const subpath = tab === 'dashboard' ? '' : `/${tab}`;
-    window.history.pushState({}, '', `/backyard${subpath}`);
+  const checkAuth = async () => {
+    try {
+      setLoading(true);
+      const res = await backyardApi.getMe();
+      if (res.user) {
+        setUser(res.user);
+      } else {
+        setUser(null);
+      }
+    } catch {
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleConfirmLogout = async () => {
+  const handleLogout = async () => {
     setLogoutLoading(true);
     try {
       await backyardApi.logout();
-    } catch {}
-    finally {
-      setLogoutLoading(false);
-      setShowLogoutModal(false);
       setUser(null);
-      window.history.pushState({}, '', '/backyard');
+      setShowLogoutModal(false);
+      window.location.href = '/backyard';
+    } catch (err) {
+      console.error('Logout error:', err);
+    } finally {
+      setLogoutLoading(false);
     }
+  };
+
+  const navigateTo = (tab: string) => {
+    setActiveTab(tab);
+    window.history.pushState({}, '', tab === 'dashboard' ? '/backyard' : `/backyard/${tab}`);
   };
 
   if (loading) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--by-bg-app)', color: 'var(--by-text-secondary)' }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ width: '40px', height: '40px', border: '3px solid var(--by-border-strong)', borderTopColor: 'var(--by-primary)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px auto' }} />
-          <div style={{ fontSize: '0.9rem' }}>正在验证后台权限...</div>
+      <div className="by-loading-screen">
+        <div className="by-loading-spinner" />
+        <div style={{ marginTop: '12px', fontSize: '0.9rem', color: 'var(--by-text-secondary)' }}>
+          正在载入 Inbox Mate Backyard...
         </div>
       </div>
     );
@@ -126,12 +134,14 @@ export const BackyardApp: React.FC = () => {
     switch (activeTab) {
       case 'dashboard':
         return '控制台总览';
+      case 'rpa':
+        return 'Chrome RPA 状态与运维';
+      case 'tokens':
+        return 'API 授权 Token 与额度管理';
       case 'logs':
         return '用户使用记录';
       case 'keys':
         return 'API Key 管理';
-      case 'rpa':
-        return 'Chrome RPA 状态与运维';
       case 'diagnostics':
         return 'Chrome RPA 与系统诊断';
       case 'settings':
@@ -173,6 +183,14 @@ export const BackyardApp: React.FC = () => {
             >
               <Zap size={18} />
               <span>Chrome RPA 运维</span>
+            </button>
+
+            <button
+              className={`by-nav-item ${activeTab === 'tokens' ? 'active' : ''}`}
+              onClick={() => navigateTo('tokens')}
+            >
+              <KeyRound size={18} />
+              <span>授权 Token 生成器</span>
             </button>
 
             <button
@@ -306,6 +324,7 @@ export const BackyardApp: React.FC = () => {
           <main className="by-content">
             {activeTab === 'dashboard' && <DashboardView onNavigate={navigateTo} />}
             {activeTab === 'rpa' && <RpaStatusView onNavigate={navigateTo} />}
+            {activeTab === 'tokens' && <TokensView />}
             {activeTab === 'logs' && <UsageLogsView />}
             {activeTab === 'keys' && <ApiKeyView />}
             {activeTab === 'diagnostics' && <DiagnosticsView />}
@@ -396,7 +415,7 @@ export const BackyardApp: React.FC = () => {
         cancelText="取消"
         variant="warning"
         loading={logoutLoading}
-        onConfirm={handleConfirmLogout}
+        onConfirm={handleLogout}
         onClose={() => setShowLogoutModal(false)}
       />
     </div>

@@ -25,7 +25,7 @@ import {
   X
 } from 'lucide-react';
 import { backyardApi } from '../api';
-import type { ApiKeyItem } from '../types';
+import type { ApiKeyItem, AccessTokenItem } from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
 
 export const ApiKeyView: React.FC = () => {
@@ -62,9 +62,11 @@ export const ApiKeyView: React.FC = () => {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<any | null>(null);
 
-  // Export Modal State
+  // Export Modal State & Token Binding
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportFormat, setExportFormat] = useState<'custom' | 'csv' | 'json' | 'urls'>('custom');
+  const [availableTokens, setAvailableTokens] = useState<AccessTokenItem[]>([]);
+  const [selectedTokenForExport, setSelectedTokenForExport] = useState('');
   const [exportedContent, setExportedContent] = useState('');
   const [exporting, setExporting] = useState(false);
   const [exportCopied, setExportCopied] = useState(false);
@@ -101,7 +103,7 @@ export const ApiKeyView: React.FC = () => {
 
   const handleCopyUrl = (apiKey: string) => {
     const origin = window.location.origin;
-    const url = `${origin}/${apiKey}`;
+    const url = `${origin}/api/${apiKey}`;
     navigator.clipboard.writeText(url);
     setCopiedKey(apiKey);
     setTimeout(() => setCopiedKey(null), 2000);
@@ -161,7 +163,14 @@ export const ApiKeyView: React.FC = () => {
     setExportFormat(format);
     setExporting(true);
     try {
-      const res = await backyardApi.batchExportKeys({ format });
+      // Load available active tokens for selection
+      const tokenRes = await backyardApi.getTokens({ pageSize: 100 });
+      setAvailableTokens(tokenRes.items.filter((t) => t.isActive && !t.isExhausted));
+
+      const res = await backyardApi.batchExportKeys({
+        format,
+        token: selectedTokenForExport || undefined
+      });
       setExportedContent(res.formatted);
     } catch (err: any) {
       alert(err.message || '导出失败');
@@ -174,10 +183,29 @@ export const ApiKeyView: React.FC = () => {
     setExportFormat(format);
     setExporting(true);
     try {
-      const res = await backyardApi.batchExportKeys({ format });
+      const res = await backyardApi.batchExportKeys({
+        format,
+        token: selectedTokenForExport || undefined
+      });
       setExportedContent(res.formatted);
     } catch (err: any) {
       alert(err.message || '导出失败');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleExportTokenChange = async (tokenStr: string) => {
+    setSelectedTokenForExport(tokenStr);
+    setExporting(true);
+    try {
+      const res = await backyardApi.batchExportKeys({
+        format: exportFormat,
+        token: tokenStr || undefined
+      });
+      setExportedContent(res.formatted);
+    } catch (err: any) {
+      alert(err.message || '更新导出内容失败');
     } finally {
       setExporting(false);
     }
@@ -421,7 +449,7 @@ export const ApiKeyView: React.FC = () => {
         </div>
 
         {/* Pagination Bar */}
-        <div className="by-pagination" style={{ padding: '16px 20px', borderTop: '1px solid var(--by-border)' }}>
+        <div className="by-pagination" style={{ padding: '16px 20px 24px 20px', borderTop: '1px solid var(--by-border)' }}>
           <div className="by-pagination-info">
             共 <span style={{ fontWeight: 700, color: 'var(--by-text-primary)' }}>{total}</span> 个 API Key • 第 {page} / {totalPages} 页
           </div>
@@ -604,6 +632,30 @@ export const ApiKeyView: React.FC = () => {
             </div>
 
             <div className="by-modal-body">
+              {/* Token Binding Selector (User Suggestion 2) */}
+              <div style={{ marginBottom: '14px', background: 'var(--by-bg-input)', padding: '12px 14px', borderRadius: '8px', border: '1px solid var(--by-border)' }}>
+                <label className="by-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                  <span>🔗 关联绑定授权 Token (选填，自动在 URL 后附加 ?token=xxx 生成开箱即用链接)</span>
+                </label>
+                <select
+                  className="by-select"
+                  value={selectedTokenForExport}
+                  onChange={(e) => handleExportTokenChange(e.target.value)}
+                  style={{ fontSize: '0.86rem' }}
+                >
+                  <option value="">-- 不绑定 Token (仅导出基础 /api/{'{apiKey}'} 地址) --</option>
+                  {availableTokens.map((t) => (
+                    <option key={t.id} value={t.token}>
+                      {t.name} (余 {t.remainingQuota}/{t.totalQuota} 次) - {t.token.slice(0, 12)}...
+                    </option>
+                  ))}
+                </select>
+                <div style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)', marginTop: '4px' }}>
+                  选择后，导出的 API 链接将自动附带 <code>?token={'{token}'}</code>，使用者复制即可在脚本或浏览器中免密直接调用。
+                </div>
+              </div>
+
+              {/* Format Selectors */}
               <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
                 <button
                   type="button"

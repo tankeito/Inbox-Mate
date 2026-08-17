@@ -16,6 +16,7 @@ import { maskEmail } from './providers.js';
 import { routeAccountEngine } from './engine-router.js';
 import { usageLogger } from './services/usage-logger.js';
 import { diagLogger } from './services/diag-logger.js';
+import { accessTokenService } from './services/access-token-service.js';
 
 const ACCOUNT_TIMEOUT_MS = 30_000;
 const RPA_ACCOUNT_TIMEOUT_MS = 90_000;
@@ -39,6 +40,8 @@ interface JobRuntime {
   eventId: number;
   clientIp?: string;
   region?: string;
+  token?: string;
+  tokenId?: string;
 }
 
 import type { FetchAccountResult } from './imap-client.js';
@@ -91,12 +94,31 @@ export class JobManager {
 
   constructor(private readonly runAccount: JobAccountRunner) {}
 
-  create(input: CreateJobInput, meta?: { clientIp?: string; region?: string }): JobSnapshot {
+  create(input: CreateJobInput, meta?: { clientIp?: string; region?: string; token?: string }): JobSnapshot {
     for (const [id, job] of this.jobs.entries()) {
       if (!isTerminal(job.state)) {
         this.cancel(id);
       }
     }
+
+    const tokenStr = (input.token || meta?.token || '').trim();
+    let verifiedTokenId: string | undefined;
+
+    const hasMailCom = input.accounts.some((acc) => {
+      return acc.provider === 'mailcom' || routeAccountEngine(acc) === 'web_rpa';
+    });
+
+    if (tokenStr) {
+      const check = accessTokenService.verifyTokenAccess(tokenStr);
+      if (!check.valid) {
+        if (hasMailCom) {
+          throw new InboxMateError('AUTH_FAILED', 403, check.reason || 'Token 无效或额度已用尽');
+        }
+      } else {
+        verifiedTokenId = check.token?.id;
+      }
+    }
+
     const now = new Date();
     const job: JobRuntime = {
       id: randomUUID(),
@@ -105,6 +127,8 @@ export class JobManager {
       updatedAt: now,
       clientIp: meta?.clientIp || '127.0.0.1',
       region: meta?.region,
+      token: tokenStr || undefined,
+      tokenId: verifiedTokenId,
       accounts: input.accounts.map((account) => ({
         input: account,
         snapshot: {
@@ -230,7 +254,9 @@ export class JobManager {
           sourceMode: mode,
           status: 'cancelled',
           hasCode: false,
-          durationMs: Date.now() - startTime
+          durationMs: Date.now() - startTime,
+          tokenId: job.tokenId,
+          token: job.token
         });
       } else {
         const primaryCode = result && typeof result === 'object' && 'primaryCode' in result ? (result as FetchAccountResult).primaryCode : (result as unknown as CodeMatch);
@@ -239,6 +265,19 @@ export class JobManager {
         account.snapshot.messages = messages;
         account.snapshot.error = (messages && messages.length > 0) || primaryCode ? undefined : safeError('NO_MATCH');
         this.setAccountState(job, account, 'completed');
+
+        // Post-execution quota deduction: Only consume when fetch succeeded for Mail.com RPA
+        const isMailComAccount = (
+          provider === 'mailcom' ||
+          account.input?.provider === 'mailcom' ||
+          email.endsWith('@mail.com') ||
+          email.endsWith('@cheerful.com') ||
+          (account.input ? routeAccountEngine(account.input) === 'web_rpa' : false)
+        );
+
+        if (job.tokenId && isMailComAccount) {
+          accessTokenService.consumeQuota(job.tokenId);
+        }
 
         usageLogger.record({
           clientIp: job.clientIp || '127.0.0.1',
@@ -250,7 +289,9 @@ export class JobManager {
           hasCode: Boolean(primaryCode),
           extractedCode: primaryCode?.code,
           durationMs: Date.now() - startTime,
-          messageCount: messages?.length || 0
+          messageCount: messages?.length || 0,
+          tokenId: job.tokenId,
+          token: job.token
         });
       }
     } catch (error) {
@@ -286,7 +327,9 @@ export class JobManager {
         statusDetail: errorMsg,
         hasCode: false,
         durationMs,
-        messageCount: 0
+        messageCount: 0,
+        tokenId: job.tokenId,
+        token: job.token
       });
     } finally {
       clearTimeout(timeout);

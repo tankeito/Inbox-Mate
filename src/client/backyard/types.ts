@@ -95,3 +95,34 @@ export interface RpaStatusData {
   heapUsedMb: number;
 }
 
+export interface AccessTokenItem {
+  id: string;
+  token: string;
+  name: string;
+  totalQuota: number;
+  usedQuota: number;
+  remainingQuota: number;
+  isActive: boolean;
+  isExhausted: boolean;
+  expiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TokenSummaryStats {
+  totalTokens: number;
+  activeTokens: number;
+  totalQuotaAllocated: number;
+  totalQuotaUsed: number;
+  totalQuotaRemaining: number;
+}
+
+export interface TokenLogsResponse {
+  token: AccessTokenItem;
+  items: UsageLogItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
