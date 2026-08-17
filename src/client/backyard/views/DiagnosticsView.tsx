@@ -20,6 +20,8 @@ import {
 import { backyardApi } from '../api';
 import type { DiagLogItem } from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { formatFullDateTime, type DatePreset } from '../../../shared/format-utils';
+import { DateRangeFilter } from '../components/DateRangeFilter';
 
 export const DiagnosticsView: React.FC = () => {
   const [logs, setLogs] = useState<DiagLogItem[]>([]);
@@ -33,6 +35,9 @@ export const DiagnosticsView: React.FC = () => {
   const [level, setLevel] = useState('all');
   const [engine, setEngine] = useState('all');
   const [search, setSearch] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [activePreset, setActivePreset] = useState<DatePreset | 'custom' | null>(null);
 
   const [selectedLog, setSelectedLog] = useState<DiagLogItem | null>(null);
 
@@ -50,7 +55,9 @@ export const DiagnosticsView: React.FC = () => {
         pageSize,
         level,
         engine,
-        search
+        search,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined
       });
       setLogs(res.items);
       setTotal(res.total);
@@ -63,9 +70,16 @@ export const DiagnosticsView: React.FC = () => {
     }
   };
 
+  const handleDateChange = (start: string, end: string, preset?: DatePreset | 'custom' | null) => {
+    setStartDate(start);
+    setEndDate(end);
+    setActivePreset(preset || null);
+    setPage(1);
+  };
+
   useEffect(() => {
     fetchLogs();
-  }, [page, pageSize, level, engine]);
+  }, [page, pageSize, level, engine, startDate, endDate]);
 
   const handleConfirmClear = async () => {
     setClearLoading(true);
@@ -109,21 +123,24 @@ export const DiagnosticsView: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+      <div className="by-view-header">
         <div>
-          <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--by-text-primary)', margin: 0 }}>Chrome RPA 与系统诊断跟踪</h2>
-          <p style={{ fontSize: '0.86rem', color: 'var(--by-text-secondary)', marginTop: '4px' }}>
+          <h2 className="by-view-title">
+            <Activity size={22} color="var(--by-primary)" />
+            <span>Chrome RPA 与系统诊断跟踪</span>
+          </h2>
+          <p className="by-view-desc">
             针对 Mail.com 网页端无头浏览器执行步骤、并发压力、代理状态、登录拦截及 IMAP 异常进行全流程日志排查
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div className="by-view-actions">
           <button className="by-btn by-btn-secondary" onClick={fetchLogs} disabled={loading}>
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> 刷新
+            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> 刷新
           </button>
           <button className="by-btn by-btn-danger" onClick={() => setShowClearModal(true)} disabled={loading || total === 0}>
-            <Trash2 size={16} /> 清空诊断日志
+            <Trash2 size={15} /> 清空诊断日志
           </button>
         </div>
       </div>
@@ -142,7 +159,7 @@ export const DiagnosticsView: React.FC = () => {
       )}
 
       {/* Filter Bar */}
-      <div className="by-card" style={{ padding: '16px' }}>
+      <div className="by-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
           <div style={{ flex: '1 1 240px', position: 'relative' }}>
             <input
@@ -180,6 +197,15 @@ export const DiagnosticsView: React.FC = () => {
           <button className="by-btn by-btn-secondary" onClick={fetchLogs} disabled={loading}>
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> 筛选
           </button>
+        </div>
+
+        <div style={{ borderTop: '1px solid var(--by-border)', paddingTop: '10px' }}>
+          <DateRangeFilter
+            startDate={startDate}
+            endDate={endDate}
+            activePreset={activePreset}
+            onChange={handleDateChange}
+          />
         </div>
       </div>
 
@@ -219,8 +245,8 @@ export const DiagnosticsView: React.FC = () => {
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '0.8rem', color: 'var(--by-text-muted)', fontFamily: 'var(--by-font-mono)' }}>
-                        {new Date(item.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
+                      <span style={{ fontSize: '0.8rem', color: 'var(--by-text-muted)', fontFamily: 'var(--by-font-mono)', whiteSpace: 'nowrap' }}>
+                        {formatFullDateTime(item.timestamp)}
                       </span>
                       {renderLevelBadge(item.level)}
                       <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.8rem', color: 'var(--by-text-secondary)' }}>

@@ -7,15 +7,21 @@ import {
   Activity,
   Settings,
   LogOut,
-  Shield,
+  Mail,
   ExternalLink,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Monitor,
   Sun,
   Moon,
   Menu,
   X,
-  Zap
+  Zap,
+  PanelLeftClose,
+  PanelLeft,
+  Layers,
+  Globe
 } from 'lucide-react';
 import { backyardApi } from './api';
 import type { AdminUser } from './types';
@@ -26,12 +32,14 @@ import { ApiKeyView } from './views/ApiKeyView';
 import { TokensView } from './views/TokensView';
 import { RpaStatusView } from './views/RpaStatusView';
 import { DiagnosticsView } from './views/DiagnosticsView';
+import { IpAnalyticsView } from './views/IpAnalyticsView';
 import { SettingsView } from './views/SettingsView';
 import { ConfirmModal } from './components/ConfirmModal';
 import './backyard.css';
 
 function getInitialTabFromUrl(): string {
   const path = window.location.pathname;
+  if (path.includes('/backyard/ip-analytics') || path.includes('/backyard/security')) return 'ip-analytics';
   if (path.includes('/backyard/tokens')) return 'tokens';
   if (path.includes('/backyard/logs')) return 'logs';
   if (path.includes('/backyard/keys')) return 'keys';
@@ -47,10 +55,19 @@ export const BackyardApp: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>(getInitialTabFromUrl());
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [logoutLoading, setLogoutLoading] = useState(false);
+  const [showMobileDrawer, setShowMobileDrawer] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('by_sidebar_collapsed') === 'true';
+  });
+
   const [themeMode, setThemeMode] = useState<'system' | 'light' | 'dark'>(() => {
     return (localStorage.getItem('inbox_mate_theme') as any) || 'system';
   });
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('by_sidebar_collapsed', String(isSidebarCollapsed));
+  }, [isSidebarCollapsed]);
 
   useEffect(() => {
     localStorage.setItem('inbox_mate_theme', themeMode);
@@ -112,6 +129,7 @@ export const BackyardApp: React.FC = () => {
 
   const navigateTo = (tab: string) => {
     setActiveTab(tab);
+    setShowMobileDrawer(false);
     window.history.pushState({}, '', tab === 'dashboard' ? '/backyard' : `/backyard/${tab}`);
   };
 
@@ -138,6 +156,8 @@ export const BackyardApp: React.FC = () => {
         return 'Chrome RPA 状态与运维';
       case 'tokens':
         return 'API 授权 Token 与额度管理';
+      case 'ip-analytics':
+        return '客户端 IP & 地区访问统计与安全防御中心';
       case 'logs':
         return '用户使用记录';
       case 'keys':
@@ -152,77 +172,112 @@ export const BackyardApp: React.FC = () => {
   };
 
   return (
-    <div className="by-app">
+    <div className={`by-app ${isSidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <div className="by-layout">
         {/* Desktop Sidebar */}
-        <aside className="by-sidebar">
+        <aside className={`by-sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
           <div className="by-sidebar-header">
-            <div className="by-brand-logo">
-              <Shield size={20} />
+            <div
+              className="by-brand-logo"
+              onClick={() => {
+                if (isSidebarCollapsed) {
+                  setIsSidebarCollapsed(false);
+                } else {
+                  navigateTo('dashboard');
+                }
+              }}
+              style={{ cursor: 'pointer' }}
+              title={isSidebarCollapsed ? '展开侧边栏 (Expand)' : '控制台总览'}
+            >
+              <Mail size={18} strokeWidth={2.4} />
             </div>
-            <div>
+            <div className="by-sidebar-header-text">
               <div className="by-brand-title">
                 Inbox Mate <span className="by-brand-badge">Backyard</span>
               </div>
               <div style={{ fontSize: '0.72rem', color: 'var(--by-text-muted)' }}>系统管理中枢</div>
             </div>
+            <button
+              type="button"
+              className="by-sidebar-toggle-btn"
+              onClick={() => setIsSidebarCollapsed(true)}
+              title="收缩侧边栏 (Collapse)"
+            >
+              <PanelLeftClose size={16} />
+            </button>
           </div>
 
           <nav className="by-sidebar-nav">
             <button
               className={`by-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
               onClick={() => navigateTo('dashboard')}
+              title={isSidebarCollapsed ? '控制台总览' : undefined}
             >
               <LayoutDashboard size={18} />
-              <span>控制台总览</span>
+              <span className="by-nav-text">控制台总览</span>
             </button>
 
             <button
               className={`by-nav-item ${activeTab === 'rpa' ? 'active' : ''}`}
               onClick={() => navigateTo('rpa')}
+              title={isSidebarCollapsed ? 'Chrome RPA 运维' : undefined}
             >
               <Zap size={18} />
-              <span>Chrome RPA 运维</span>
+              <span className="by-nav-text">Chrome RPA 运维</span>
             </button>
 
             <button
               className={`by-nav-item ${activeTab === 'tokens' ? 'active' : ''}`}
               onClick={() => navigateTo('tokens')}
+              title={isSidebarCollapsed ? '授权 Token 生成器' : undefined}
             >
               <KeyRound size={18} />
-              <span>授权 Token 生成器</span>
+              <span className="by-nav-text">授权 Token 生成器</span>
+            </button>
+
+            <button
+              className={`by-nav-item ${activeTab === 'ip-analytics' ? 'active' : ''}`}
+              onClick={() => navigateTo('ip-analytics')}
+              title={isSidebarCollapsed ? 'IP 统计与安全防御' : undefined}
+            >
+              <Globe size={18} />
+              <span className="by-nav-text">IP 统计与安全防御</span>
             </button>
 
             <button
               className={`by-nav-item ${activeTab === 'logs' ? 'active' : ''}`}
               onClick={() => navigateTo('logs')}
+              title={isSidebarCollapsed ? '使用记录审计' : undefined}
             >
               <FileText size={18} />
-              <span>使用记录审计</span>
+              <span className="by-nav-text">使用记录审计</span>
             </button>
 
             <button
               className={`by-nav-item ${activeTab === 'keys' ? 'active' : ''}`}
               onClick={() => navigateTo('keys')}
+              title={isSidebarCollapsed ? 'API Key 发行与管理' : undefined}
             >
               <Key size={18} />
-              <span>API Key 发行与管理</span>
+              <span className="by-nav-text">API Key 发行与管理</span>
             </button>
 
             <button
               className={`by-nav-item ${activeTab === 'diagnostics' ? 'active' : ''}`}
               onClick={() => navigateTo('diagnostics')}
+              title={isSidebarCollapsed ? 'Chrome RPA 诊断' : undefined}
             >
               <Activity size={18} />
-              <span>Chrome RPA 诊断</span>
+              <span className="by-nav-text">Chrome RPA 诊断</span>
             </button>
 
             <button
               className={`by-nav-item ${activeTab === 'settings' ? 'active' : ''}`}
               onClick={() => navigateTo('settings')}
+              title={isSidebarCollapsed ? '安全与 2FA 设置' : undefined}
             >
               <Settings size={18} />
-              <span>安全与 2FA 设置</span>
+              <span className="by-nav-text">安全与 2FA 设置</span>
             </button>
           </nav>
 
@@ -239,7 +294,7 @@ export const BackyardApp: React.FC = () => {
               </div>
             </div>
 
-            <button className="by-btn-icon" onClick={() => setShowLogoutModal(true)} title="退出后台">
+            <button className="by-btn-icon by-sidebar-logout-btn" onClick={() => setShowLogoutModal(true)} title="退出后台">
               <LogOut size={16} color="var(--by-text-secondary)" />
             </button>
           </div>
@@ -249,8 +304,27 @@ export const BackyardApp: React.FC = () => {
         <div className="by-main">
           {/* Header */}
           <header className="by-header">
-            <div className="by-header-title">
-              <span>{getPageTitle()}</span>
+            {/* Left side: Mobile Menu Trigger + Brand Logo on mobile; Title on desktop */}
+            <div className="by-header-left">
+              <button
+                type="button"
+                className="by-mobile-menu-trigger"
+                onClick={() => setShowMobileDrawer(true)}
+                title="打开导航菜单"
+              >
+                <Menu size={20} />
+              </button>
+
+              <div className="by-mobile-brand">
+                <div className="by-mobile-logo">
+                  <Mail size={15} strokeWidth={2.4} color="#ffffff" />
+                </div>
+                <span>Inbox Mate</span>
+              </div>
+
+              <div className="by-desktop-header-title">
+                <span>{getPageTitle()}</span>
+              </div>
             </div>
 
             <div className="by-header-actions">
@@ -306,16 +380,18 @@ export const BackyardApp: React.FC = () => {
                 href="/"
                 className="by-btn by-btn-secondary by-btn-sm"
                 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                title="返回前台主工作台"
               >
                 <span>前台工作台</span>
                 <ExternalLink size={13} />
               </a>
 
               <button
-                className="by-btn by-btn-secondary by-btn-sm"
+                className="by-btn by-btn-secondary by-btn-sm by-header-logout-btn"
                 onClick={() => setShowLogoutModal(true)}
+                title="安全退出后台"
               >
-                <LogOut size={14} /> 退出
+                <LogOut size={14} /> <span>退出</span>
               </button>
             </div>
           </header>
@@ -325,6 +401,7 @@ export const BackyardApp: React.FC = () => {
             {activeTab === 'dashboard' && <DashboardView onNavigate={navigateTo} />}
             {activeTab === 'rpa' && <RpaStatusView onNavigate={navigateTo} />}
             {activeTab === 'tokens' && <TokensView />}
+            {activeTab === 'ip-analytics' && <IpAnalyticsView />}
             {activeTab === 'logs' && <UsageLogsView />}
             {activeTab === 'keys' && <ApiKeyView />}
             {activeTab === 'diagnostics' && <DiagnosticsView />}
@@ -355,56 +432,126 @@ export const BackyardApp: React.FC = () => {
         </div>
       </div>
 
-      {/* Mobile Bottom Navigation Bar (< 768px) */}
-      <nav className="by-mobile-nav">
-        <button
-          className={`by-mobile-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
-          onClick={() => navigateTo('dashboard')}
-        >
-          <LayoutDashboard size={18} />
-          <span>总览</span>
-        </button>
+      {/* Mobile Slide-Out Navigation Drawer */}
+      {showMobileDrawer && (
+        <div className="by-drawer-overlay" onClick={() => setShowMobileDrawer(false)}>
+          <div className="by-mobile-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="by-drawer-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div className="by-brand-logo" style={{ width: '32px', height: '32px', minWidth: '32px', minHeight: '32px' }}>
+                  <Mail size={16} strokeWidth={2.4} />
+                </div>
+                <div>
+                  <div className="by-brand-title" style={{ fontSize: '1rem' }}>
+                    Inbox Mate <span className="by-brand-badge">Backyard</span>
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--by-text-muted)' }}>系统管理中枢</div>
+                </div>
+              </div>
+              <button className="by-btn-icon" onClick={() => setShowMobileDrawer(false)}>
+                <X size={18} />
+              </button>
+            </div>
 
-        <button
-          className={`by-mobile-nav-item ${activeTab === 'rpa' ? 'active' : ''}`}
-          onClick={() => navigateTo('rpa')}
-        >
-          <Zap size={18} />
-          <span>RPA</span>
-        </button>
+            <nav className="by-drawer-nav">
+              <button
+                className={`by-drawer-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
+                onClick={() => navigateTo('dashboard')}
+              >
+                <LayoutDashboard size={18} />
+                <span>控制台总览</span>
+              </button>
 
-        <button
-          className={`by-mobile-nav-item ${activeTab === 'logs' ? 'active' : ''}`}
-          onClick={() => navigateTo('logs')}
-        >
-          <FileText size={18} />
-          <span>记录</span>
-        </button>
+              <button
+                className={`by-drawer-nav-item ${activeTab === 'rpa' ? 'active' : ''}`}
+                onClick={() => navigateTo('rpa')}
+              >
+                <Zap size={18} />
+                <span>Chrome RPA 运维</span>
+              </button>
 
-        <button
-          className={`by-mobile-nav-item ${activeTab === 'keys' ? 'active' : ''}`}
-          onClick={() => navigateTo('keys')}
-        >
-          <Key size={18} />
-          <span>Key</span>
-        </button>
+              <button
+                className={`by-drawer-nav-item ${activeTab === 'tokens' ? 'active' : ''}`}
+                onClick={() => navigateTo('tokens')}
+              >
+                <KeyRound size={18} />
+                <span>API 授权 Token 生成器</span>
+              </button>
 
-        <button
-          className={`by-mobile-nav-item ${activeTab === 'diagnostics' ? 'active' : ''}`}
-          onClick={() => navigateTo('diagnostics')}
-        >
-          <Activity size={18} />
-          <span>诊断</span>
-        </button>
+              <button
+                className={`by-drawer-nav-item ${activeTab === 'ip-analytics' ? 'active' : ''}`}
+                onClick={() => navigateTo('ip-analytics')}
+              >
+                <Globe size={18} />
+                <span>IP 统计与安全防御</span>
+              </button>
 
-        <button
-          className={`by-mobile-nav-item ${activeTab === 'settings' ? 'active' : ''}`}
-          onClick={() => navigateTo('settings')}
-        >
-          <Settings size={18} />
-          <span>设置</span>
-        </button>
-      </nav>
+              <button
+                className={`by-drawer-nav-item ${activeTab === 'logs' ? 'active' : ''}`}
+                onClick={() => navigateTo('logs')}
+              >
+                <FileText size={18} />
+                <span>用户使用记录审计</span>
+              </button>
+
+              <button
+                className={`by-drawer-nav-item ${activeTab === 'keys' ? 'active' : ''}`}
+                onClick={() => navigateTo('keys')}
+              >
+                <Key size={18} />
+                <span>API Key 发行与管理</span>
+              </button>
+
+              <button
+                className={`by-drawer-nav-item ${activeTab === 'diagnostics' ? 'active' : ''}`}
+                onClick={() => navigateTo('diagnostics')}
+              >
+                <Activity size={18} />
+                <span>Chrome RPA 与系统诊断</span>
+              </button>
+
+              <button
+                className={`by-drawer-nav-item ${activeTab === 'settings' ? 'active' : ''}`}
+                onClick={() => navigateTo('settings')}
+              >
+                <Settings size={18} />
+                <span>安全与 2FA 设置</span>
+              </button>
+            </nav>
+
+            <div className="by-drawer-footer">
+              <div className="by-user-badge" style={{ marginBottom: '12px' }}>
+                <div className="by-user-avatar">
+                  {user.email.slice(0, 2).toUpperCase()}
+                </div>
+                <div className="by-user-info">
+                  <div className="by-user-name" title={user.email}>{user.email}</div>
+                  <div className="by-user-role">
+                    {user.twoFactorEnabled ? '2FA 安全保护中' : '管理员 (未开2FA)'}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <a
+                  href="/"
+                  className="by-btn by-btn-secondary by-btn-sm"
+                  style={{ flex: 1, justifyContent: 'center' }}
+                >
+                  <ExternalLink size={13} /> 前台工作台
+                </a>
+                <button
+                  className="by-btn by-btn-danger by-btn-sm"
+                  onClick={() => { setShowMobileDrawer(false); setShowLogoutModal(true); }}
+                  style={{ flex: 1, justifyContent: 'center' }}
+                >
+                  <LogOut size={13} /> 退出
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Logout Confirm Modal */}
       <ConfirmModal

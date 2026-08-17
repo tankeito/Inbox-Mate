@@ -25,6 +25,8 @@ import {
 } from 'lucide-react';
 import { backyardApi } from '../api';
 import type { UsageLogItem, DiagLogItem } from '../types';
+import { formatDuration, formatFullDateTime, type DatePreset } from '../../../shared/format-utils';
+import { DateRangeFilter } from '../components/DateRangeFilter';
 
 export const UsageLogsView: React.FC = () => {
   const [logs, setLogs] = useState<UsageLogItem[]>([]);
@@ -39,6 +41,9 @@ export const UsageLogsView: React.FC = () => {
   const [status, setStatus] = useState('all');
   const [provider, setProvider] = useState('all');
   const [sourceMode, setSourceMode] = useState('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [activePreset, setActivePreset] = useState<DatePreset | 'custom' | null>(null);
 
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
@@ -51,7 +56,7 @@ export const UsageLogsView: React.FC = () => {
   // Quick IP Block State
   const [blockIpTarget, setBlockIpTarget] = useState<string | null>(null);
   const [blockReason, setBlockReason] = useState('');
-  const [blockDuration, setBlockDuration] = useState('0');
+  const [blockDuration, setBlockDuration] = useState('24');
   const [blockLoading, setBlockLoading] = useState(false);
   const [blockError, setBlockError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -65,7 +70,9 @@ export const UsageLogsView: React.FC = () => {
         search,
         status,
         provider,
-        sourceMode
+        sourceMode,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined
       });
       setLogs(res.items);
       setTotal(res.total);
@@ -79,7 +86,14 @@ export const UsageLogsView: React.FC = () => {
 
   useEffect(() => {
     fetchLogs();
-  }, [page, pageSize, status, provider, sourceMode]);
+  }, [page, pageSize, status, provider, sourceMode, startDate, endDate]);
+
+  const handleDateChange = (start: string, end: string, preset?: DatePreset | 'custom' | null) => {
+    setStartDate(start);
+    setEndDate(end);
+    setActivePreset(preset || null);
+    setPage(1);
+  };
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,7 +108,7 @@ export const UsageLogsView: React.FC = () => {
   };
 
   const handleExportCsv = () => {
-    const url = backyardApi.getExportLogsUrl({ search, status, provider, sourceMode });
+    const url = backyardApi.getExportLogsUrl({ search, status, provider, sourceMode, startDate, endDate });
     window.open(url, '_blank');
   };
 
@@ -183,21 +197,24 @@ export const UsageLogsView: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Header & Export Action */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+      <div className="by-view-header">
         <div>
-          <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--by-text-primary)', margin: 0 }}>用户使用情况记录</h2>
-          <p style={{ fontSize: '0.86rem', color: 'var(--by-text-secondary)', marginTop: '4px' }}>
+          <h2 className="by-view-title">
+            <FileText size={22} color="var(--by-primary)" />
+            <span>用户使用情况记录</span>
+          </h2>
+          <p className="by-view-desc">
             完整审计用户抓取行为，记录 IP、地区、邮箱类型、执行状态与耗时（严格不记录密码）
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div className="by-view-actions">
           <button className="by-btn by-btn-secondary" onClick={fetchLogs} disabled={loading}>
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> 刷新
+            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> 刷新
           </button>
           <button className="by-btn by-btn-primary" onClick={handleExportCsv}>
-            <Download size={16} /> 导出 CSV 记录
+            <Download size={15} /> 导出 CSV 记录
           </button>
         </div>
       </div>
@@ -222,7 +239,7 @@ export const UsageLogsView: React.FC = () => {
       )}
 
       {/* Filter Bar */}
-      <div className="by-card" style={{ padding: '16px' }}>
+      <div className="by-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
         <form onSubmit={handleSearchSubmit} style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
           <div style={{ flex: '1 1 240px', position: 'relative' }}>
             <input
@@ -273,6 +290,16 @@ export const UsageLogsView: React.FC = () => {
             <Filter size={16} /> 筛选
           </button>
         </form>
+
+        {/* Date Range Bar with Presets */}
+        <div style={{ borderTop: '1px solid var(--by-border)', paddingTop: '10px' }}>
+          <DateRangeFilter
+            startDate={startDate}
+            endDate={endDate}
+            activePreset={activePreset}
+            onChange={handleDateChange}
+          />
+        </div>
       </div>
 
       {/* Usage Table (Responsive Table to Card View) */}
@@ -310,13 +337,7 @@ export const UsageLogsView: React.FC = () => {
                 logs.map((item) => (
                   <tr key={item.id}>
                     <td data-label="请求时间" style={{ whiteSpace: 'nowrap', fontSize: '0.82rem', color: 'var(--by-text-secondary)' }}>
-                      {new Date(item.createdAt).toLocaleString('zh-CN', {
-                        month: '2-digit',
-                        day: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        second: '2-digit'
-                      })}
+                      {formatFullDateTime(item.createdAt)}
                     </td>
 
                     <td data-label="客户端 IP & 地区">
@@ -369,7 +390,7 @@ export const UsageLogsView: React.FC = () => {
                     </td>
 
                     <td data-label="耗时" style={{ color: 'var(--by-text-secondary)', fontSize: '0.82rem', fontFamily: 'var(--by-font-mono)' }}>
-                      {item.durationMs}ms
+                      {formatDuration(item.durationMs)}
                     </td>
 
                     <td data-label="详情与日志">
@@ -442,7 +463,7 @@ export const UsageLogsView: React.FC = () => {
                   <span>执行详细日志与排查详情</span>
                 </div>
                 <div style={{ fontSize: '0.78rem', color: 'var(--by-text-muted)', marginTop: '2px' }}>
-                  记录 ID: {selectedLog.id} • {new Date(selectedLog.createdAt).toLocaleString('zh-CN')}
+                  记录 ID: {selectedLog.id} • {formatFullDateTime(selectedLog.createdAt)}
                 </div>
               </div>
               <button className="by-btn-icon" onClick={() => setSelectedLog(null)}>
@@ -489,7 +510,7 @@ export const UsageLogsView: React.FC = () => {
                     {selectedLog.extractedCode || '无验证码'}
                   </span>
                   <span style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)' }}>
-                    耗时: {selectedLog.durationMs}ms • 邮件数: {selectedLog.messageCount}
+                    耗时: {formatDuration(selectedLog.durationMs)} • 邮件数: {selectedLog.messageCount}
                   </span>
                 </div>
               </div>

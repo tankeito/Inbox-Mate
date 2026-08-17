@@ -26,6 +26,8 @@ import {
 import { backyardApi } from '../api';
 import type { AccessTokenItem, TokenSummaryStats, UsageLogItem } from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { formatDuration, formatFullDateTime, type DatePreset } from '../../../shared/format-utils';
+import { DateRangeFilter } from '../components/DateRangeFilter';
 
 export const TokensView: React.FC = () => {
   const [tokens, setTokens] = useState<AccessTokenItem[]>([]);
@@ -36,6 +38,9 @@ export const TokensView: React.FC = () => {
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [search, setSearch] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [activePreset, setActivePreset] = useState<DatePreset | 'custom' | null>(null);
 
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -61,8 +66,12 @@ export const TokensView: React.FC = () => {
   const [tokenLogs, setTokenLogs] = useState<UsageLogItem[]>([]);
   const [tokenLogsLoading, setTokenLogsLoading] = useState(false);
   const [tokenLogsPage, setTokenLogsPage] = useState(1);
+  const [tokenLogsPageSize, setTokenLogsPageSize] = useState(10);
   const [tokenLogsTotal, setTokenLogsTotal] = useState(0);
   const [tokenLogsTotalPages, setTokenLogsTotalPages] = useState(1);
+  const [tokenLogsStartDate, setTokenLogsStartDate] = useState('');
+  const [tokenLogsEndDate, setTokenLogsEndDate] = useState('');
+  const [tokenLogsActivePreset, setTokenLogsActivePreset] = useState<DatePreset | 'custom' | null>(null);
 
   const fetchTokens = async () => {
     try {
@@ -70,7 +79,9 @@ export const TokensView: React.FC = () => {
       const res = await backyardApi.getTokens({
         page,
         pageSize,
-        search: search.trim() || undefined
+        search: search.trim() || undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined
       });
       setTokens(res.items);
       setSummary(res.summary);
@@ -85,7 +96,14 @@ export const TokensView: React.FC = () => {
 
   useEffect(() => {
     fetchTokens();
-  }, [page, pageSize]);
+  }, [page, pageSize, startDate, endDate]);
+
+  const handleDateChange = (start: string, end: string, preset?: DatePreset | 'custom' | null) => {
+    setStartDate(start);
+    setEndDate(end);
+    setActivePreset(preset || null);
+    setPage(1);
+  };
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -181,12 +199,13 @@ export const TokensView: React.FC = () => {
     }
   };
 
-  const handleOpenTokenLogs = async (item: AccessTokenItem, p = 1) => {
+  const handleOpenTokenLogs = async (item: AccessTokenItem, p = 1, size = tokenLogsPageSize) => {
     setTokenForLogs(item);
     setTokenLogsPage(p);
+    setTokenLogsPageSize(size);
     setTokenLogsLoading(true);
     try {
-      const res = await backyardApi.getTokenLogs(item.id, { page: p, pageSize: 10 });
+      const res = await backyardApi.getTokenLogs(item.id, { page: p, pageSize: size });
       setTokenLogs(res.items);
       setTokenLogsTotal(res.total);
       setTokenLogsTotalPages(res.totalPages);
@@ -201,17 +220,18 @@ export const TokensView: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', paddingBottom: '32px' }}>
       {/* Top Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+      <div className="by-view-header">
         <div>
-          <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--by-text-primary)', margin: 0 }}>
-            API 授权 Token 与额度生成器
+          <h2 className="by-view-title">
+            <KeyRound size={22} color="var(--by-primary)" />
+            <span>API 授权 Token 与额度生成器</span>
           </h2>
-          <p style={{ fontSize: '0.86rem', color: 'var(--by-text-secondary)', marginTop: '4px' }}>
+          <p className="by-view-desc">
             发行独立访问令牌，调用 API 自动扣减可用次数，成功扣费、失败免扣，保护 2C4G 服务器不被恶意挤兑
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div className="by-view-actions">
           <button className="by-btn by-btn-secondary" onClick={fetchTokens} disabled={loading}>
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> 刷新
           </button>
@@ -288,7 +308,7 @@ export const TokensView: React.FC = () => {
       </div>
 
       {/* Filter Bar */}
-      <div className="by-card" style={{ padding: '16px' }}>
+      <div className="by-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
         <form onSubmit={handleSearchSubmit} style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
           <div style={{ position: 'relative', flex: '1 1 240px' }}>
             <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--by-text-muted)' }} />
@@ -306,6 +326,15 @@ export const TokensView: React.FC = () => {
             <Search size={15} /> 筛选
           </button>
         </form>
+
+        <div style={{ borderTop: '1px solid var(--by-border)', paddingTop: '10px' }}>
+          <DateRangeFilter
+            startDate={startDate}
+            endDate={endDate}
+            activePreset={activePreset}
+            onChange={handleDateChange}
+          />
+        </div>
       </div>
 
       {/* Token List Table / Card View */}
@@ -404,8 +433,8 @@ export const TokensView: React.FC = () => {
 
                       <td data-label="创建/到期">
                         <div style={{ fontSize: '0.76rem', color: 'var(--by-text-muted)' }}>
-                          创建: {new Date(item.createdAt).toLocaleDateString('zh-CN')}<br />
-                          {item.expiresAt ? `到期: ${new Date(item.expiresAt).toLocaleDateString('zh-CN')}` : '永久有效'}
+                          创建: {formatFullDateTime(item.createdAt)}<br />
+                          {item.expiresAt ? `到期: ${formatFullDateTime(item.expiresAt)}` : '永久有效'}
                         </div>
                       </td>
 
@@ -790,7 +819,7 @@ export const TokensView: React.FC = () => {
                         tokenLogs.map((log) => (
                           <tr key={log.id}>
                             <td style={{ whiteSpace: 'nowrap', color: 'var(--by-text-secondary)' }}>
-                              {log.createdAt ? log.createdAt.replace('T', ' ').slice(0, 19) : '-'}
+                              {formatFullDateTime(log.createdAt)}
                             </td>
                             <td>
                               <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -833,8 +862,8 @@ export const TokensView: React.FC = () => {
                                 <span style={{ color: 'var(--by-text-muted)' }}>-</span>
                               )}
                             </td>
-                            <td style={{ color: 'var(--by-text-secondary)' }}>
-                              {log.durationMs}ms
+                            <td style={{ color: 'var(--by-text-secondary)', fontFamily: 'var(--by-font-mono)' }}>
+                              {formatDuration(log.durationMs)}
                             </td>
                           </tr>
                         ))
@@ -844,32 +873,49 @@ export const TokensView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Logs Modal Pagination */}
-              {tokenLogsTotalPages > 1 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--by-text-muted)' }}>
-                    第 {tokenLogsPage} / {tokenLogsTotalPages} 页 (共 {tokenLogsTotal} 条)
-                  </div>
-                  <div style={{ display: 'flex', gap: '6px' }}>
-                    <button
-                      type="button"
-                      className="by-btn by-btn-secondary by-btn-sm"
-                      disabled={tokenLogsPage <= 1}
-                      onClick={() => handleOpenTokenLogs(tokenForLogs, tokenLogsPage - 1)}
-                    >
-                      <ChevronLeft size={13} /> 上一页
-                    </button>
-                    <button
-                      type="button"
-                      className="by-btn by-btn-secondary by-btn-sm"
-                      disabled={tokenLogsPage >= tokenLogsTotalPages}
-                      onClick={() => handleOpenTokenLogs(tokenForLogs, tokenLogsPage + 1)}
-                    >
-                      下一页 <ChevronRight size={13} />
-                    </button>
-                  </div>
+              {/* Logs Modal Pagination Bar */}
+              <div className="by-pagination" style={{ padding: '12px 16px', borderTop: '1px solid var(--by-border)', marginTop: '4px' }}>
+                <div className="by-pagination-info">
+                  共 <span style={{ fontWeight: 700, color: 'var(--by-text-primary)' }}>{tokenLogsTotal}</span> 条记录 • 第 {tokenLogsPage} / {tokenLogsTotalPages} 页
                 </div>
-              )}
+
+                <div className="by-pagination-controls">
+                  <select
+                    className="by-select by-btn-sm"
+                    value={tokenLogsPageSize}
+                    onChange={(e) => {
+                      const newSize = Number(e.target.value);
+                      setTokenLogsPageSize(newSize);
+                      handleOpenTokenLogs(tokenForLogs, 1, newSize);
+                    }}
+                    style={{ width: 'auto', padding: '0 24px 0 8px', height: '28px', lineHeight: '26px', fontSize: '0.78rem' }}
+                  >
+                    <option value="10">10条/页</option>
+                    <option value="20">20条/页</option>
+                    <option value="50">50条/页</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    className="by-btn by-btn-secondary by-btn-sm"
+                    disabled={tokenLogsPage <= 1 || tokenLogsLoading}
+                    onClick={() => handleOpenTokenLogs(tokenForLogs, tokenLogsPage - 1, tokenLogsPageSize)}
+                    title={tokenLogsPage <= 1 ? '已是第一页' : '上一页'}
+                  >
+                    <ChevronLeft size={13} /> 上一页
+                  </button>
+
+                  <button
+                    type="button"
+                    className="by-btn by-btn-secondary by-btn-sm"
+                    disabled={tokenLogsPage >= tokenLogsTotalPages || tokenLogsLoading}
+                    onClick={() => handleOpenTokenLogs(tokenForLogs, tokenLogsPage + 1, tokenLogsPageSize)}
+                    title={tokenLogsPage >= tokenLogsTotalPages ? '已是最后一页' : '下一页'}
+                  >
+                    下一页 <ChevronRight size={13} />
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="by-modal-footer">

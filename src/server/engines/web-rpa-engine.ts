@@ -4,6 +4,7 @@ import { simpleParser } from 'mailparser';
 import { chromium, type Browser, type BrowserContext, type Frame, type Locator, type Page, type Response } from 'playwright';
 import type { AccountInput, CodeMatch, EmailItem } from '../../shared/types.js';
 import { extractVerificationCode } from '../../shared/verification-code.js';
+import { formatDuration } from '../../shared/format-utils.js';
 import { InboxMateError } from '../errors.js';
 import type { FetchAccountOptions, FetchAccountResult } from '../imap-client.js';
 import { diagLogger } from '../services/diag-logger.js';
@@ -358,7 +359,7 @@ export async function testRpaHealthCheck(): Promise<{
     const latency = Date.now() - startTime;
     const hasCaptcha = isCaptchaPage(content);
 
-    diagLogger.info('web_rpa', '自检完成', `Mail.com 连通性自检成功 (耗时: ${latency}ms, 标题: "${title}", 验证码: ${hasCaptcha ? '有' : '无'})`);
+    diagLogger.info('web_rpa', '自检完成', `Mail.com 连通性自检成功 (耗时: ${formatDuration(latency)}, 标题: "${title}", 验证码: ${hasCaptcha ? '有' : '无'})`);
 
     return {
       ok: true,
@@ -924,7 +925,7 @@ export async function fetchAccountVerificationCodeViaWebRpa(
 
     options.onProgress('connecting');
     stage = '打开 Mail.com';
-    diagLogger.debug('web_rpa', stage, `正在导航到 Mail.com 首页 (耗时: ${Date.now() - startTime}ms)`, undefined, email);
+    diagLogger.debug('web_rpa', stage, `正在导航到 Mail.com 首页 (耗时: ${formatDuration(Date.now() - startTime)})`, undefined, email);
     await page.goto(MAIL_COM_HOME, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT_MS });
     const initialContent = await page.content().catch(() => '');
     if (isCaptchaPage(initialContent)) {
@@ -978,7 +979,7 @@ export async function fetchAccountVerificationCodeViaWebRpa(
       const content = await page.content().catch(() => '');
       if (isCaptchaPage(content)) throw new InboxMateError('CAPTCHA_TRIGGERED');
       if (isAuthenticationFailure(page.url(), content)) throw new InboxMateError('AUTH_FAILED');
-      diagLogger.warn('web_rpa', stage, `30秒内未加载出收件箱列表 (并发: ${activeRunningAccounts}, 耗时: ${Date.now() - startTime}ms)`, {
+      diagLogger.warn('web_rpa', stage, `30秒内未加载出收件箱列表 (并发: ${activeRunningAccounts}, 耗时: ${formatDuration(Date.now() - startTime)})`, {
         url: page.url(),
         concurrentTasks: activeRunningAccounts
       }, email);
@@ -1012,7 +1013,7 @@ export async function fetchAccountVerificationCodeViaWebRpa(
     if (options.signal.aborted) throw new InboxMateError('CANCELLED');
 
     const mapped = mapResult(account, selectedMails);
-    diagLogger.info('web_rpa', '抓取成功', `完成邮件抓取，识别验证码: ${mapped.primaryCode?.code || '无'} (总耗时: ${Date.now() - startTime}ms)`, {
+    diagLogger.info('web_rpa', '抓取成功', `完成邮件抓取，识别验证码: ${mapped.primaryCode?.code || '无'} (总耗时: ${formatDuration(Date.now() - startTime)})`, {
       code: mapped.primaryCode?.code,
       messageCount: mapped.messages.length,
       durationMs: Date.now() - startTime,

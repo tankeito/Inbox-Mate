@@ -44,6 +44,11 @@ export interface ApiKeyItem {
   expiresAt: string | null;
   callCount: number;
   lastUsedAt: string | null;
+  tokenId?: string | null;
+  boundToken?: string | null;
+  boundTokenName?: string | null;
+  boundTokenRemaining?: number | null;
+  boundTokenTotal?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -74,8 +79,61 @@ export interface BlockedIpItem {
   ip: string;
   reason: string;
   blockedBy: string;
+  durationHours: number;
   createdAt: string;
   expiresAt: string | null;
+  isActive: boolean;
+}
+
+export interface IpAnalyticsSummary {
+  totalRequests: number;
+  uniqueIps: number;
+  totalSuccess: number;
+  successRate: number;
+  activeBansCount: number;
+  topCountry: { code: string; name: string; flag: string; count: number };
+}
+
+export interface IpAnalyticsItem {
+  ip: string;
+  countryCode: string;
+  countryName: string;
+  region: string;
+  flag: string;
+  requestCount: number;
+  successCount: number;
+  successRate: number;
+  lastSeenAt: string;
+  isBanned: boolean;
+  banDetails?: {
+    id: string;
+    reason: string;
+    expiresAt: string | null;
+    durationHours: number;
+    createdAt: string;
+  };
+}
+
+export interface CountryStatItem {
+  countryCode: string;
+  countryName: string;
+  flag: string;
+  requestCount: number;
+  uniqueIps: number;
+  percentage: number;
+}
+
+export interface WorldMapStat {
+  count: number;
+  uniqueIps: number;
+  percentage: number;
+}
+
+export interface IpAnalyticsResponse {
+  summary: IpAnalyticsSummary;
+  ipList: IpAnalyticsItem[];
+  countryList: CountryStatItem[];
+  worldMapData: Record<string, WorldMapStat>;
 }
 
 export interface RpaStatusData {
@@ -125,4 +183,5 @@ export interface TokenLogsResponse {
   pageSize: number;
   totalPages: number;
 }
+
 

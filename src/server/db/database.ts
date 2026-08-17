@@ -125,6 +125,8 @@ class DatabaseService {
         expires_at TEXT,
         call_count INTEGER NOT NULL DEFAULT 0,
         last_used_at TEXT,
+        token_id TEXT,
+        bound_token TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -139,16 +141,22 @@ class DatabaseService {
         updated_at TEXT NOT NULL
       );
 
-      CREATE TABLE IF NOT EXISTS blocked_ips (
+      CREATE TABLE IF NOT EXISTS ip_bans (
         id TEXT PRIMARY KEY,
         ip TEXT UNIQUE NOT NULL,
-        reason TEXT,
-        blocked_by TEXT,
-        created_at TEXT NOT NULL,
-        expires_at TEXT
+        reason TEXT NOT NULL,
+        banned_by TEXT DEFAULT 'admin',
+        duration_hours INTEGER NOT NULL DEFAULT 0,
+        banned_at TEXT NOT NULL,
+        expires_at TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        unbanned_at TEXT,
+        unban_reason TEXT
       );
 
-      CREATE INDEX IF NOT EXISTS idx_blocked_ips_ip ON blocked_ips(ip);
+      CREATE INDEX IF NOT EXISTS idx_ip_bans_ip ON ip_bans(ip);
+      CREATE INDEX IF NOT EXISTS idx_ip_bans_active ON ip_bans(is_active);
+      CREATE INDEX IF NOT EXISTS idx_ip_bans_banned_at ON ip_bans(banned_at DESC);
 
       CREATE TABLE IF NOT EXISTS access_tokens (
         id TEXT PRIMARY KEY,
@@ -168,15 +176,24 @@ class DatabaseService {
 
     // Column migrations
     try {
-      const columns = (this.db.prepare('PRAGMA table_info(usage_logs)').all() as any[]).map((c) => c.name);
-      if (!columns.includes('token_id')) {
+      const usageColumns = (this.db.prepare('PRAGMA table_info(usage_logs)').all() as any[]).map((c) => c.name);
+      if (!usageColumns.includes('token_id')) {
         this.db.exec('ALTER TABLE usage_logs ADD COLUMN token_id TEXT;');
       }
-      if (!columns.includes('token')) {
+      if (!usageColumns.includes('token')) {
         this.db.exec('ALTER TABLE usage_logs ADD COLUMN token TEXT;');
       }
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_usage_logs_token_id ON usage_logs(token_id);');
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_usage_logs_token ON usage_logs(token);');
+
+      const keyColumns = (this.db.prepare('PRAGMA table_info(api_keys)').all() as any[]).map((c) => c.name);
+      if (!keyColumns.includes('token_id')) {
+        this.db.exec('ALTER TABLE api_keys ADD COLUMN token_id TEXT;');
+      }
+      if (!keyColumns.includes('bound_token')) {
+        this.db.exec('ALTER TABLE api_keys ADD COLUMN bound_token TEXT;');
+      }
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_api_keys_token_id ON api_keys(token_id);');
     } catch {}
   }
 

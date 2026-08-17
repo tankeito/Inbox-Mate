@@ -19,6 +19,7 @@ import {
 import { backyardApi } from '../api';
 import type { RpaStatusData, DiagLogItem } from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { formatDuration, formatFullDateTime } from '../../../shared/format-utils';
 
 interface RpaStatusViewProps {
   onNavigate?: (tab: string) => void;
@@ -109,7 +110,7 @@ export const RpaStatusView: React.FC<RpaStatusViewProps> = ({ onNavigate }) => {
     try {
       const res = await backyardApi.testRpaHealthCheck();
       setHealthResult(res);
-      setToast({ type: 'success', message: `Mail.com 探测成功！耗时: ${res.latencyMs}ms` });
+      setToast({ type: 'success', message: `Mail.com 探测成功！耗时: ${formatDuration(res.latencyMs)}` });
       setTimeout(() => setToast(null), 5000);
       fetchStatus();
       fetchRecentRpaLogs();
@@ -149,20 +150,21 @@ export const RpaStatusView: React.FC<RpaStatusViewProps> = ({ onNavigate }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Header & Controls */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
+      <div className="by-view-header">
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--by-text-primary)', margin: 0 }}>
-              Chrome RPA 状态与运维中枢
+            <h2 className="by-view-title">
+              <Zap size={22} color="var(--by-primary)" />
+              <span>Chrome RPA 状态与运维中枢</span>
             </h2>
             {getStatusBadge()}
           </div>
-          <p style={{ fontSize: '0.86rem', color: 'var(--by-text-secondary)', marginTop: '4px' }}>
+          <p className="by-view-desc">
             实时监控 Playwright Chromium 无头浏览器并发、内存开销与代理通道，提供手动重启与连通性自检
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+        <div className="by-view-actions">
           <button className="by-btn by-btn-secondary" onClick={refreshAll} disabled={loading}>
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> 刷新
           </button>
@@ -410,7 +412,7 @@ export const RpaStatusView: React.FC<RpaStatusViewProps> = ({ onNavigate }) => {
               <div key={item.id} className="by-rpa-trace-item">
                 <div className="by-rpa-trace-meta">
                   <span className="by-rpa-trace-time">
-                    {new Date(item.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
+                    {formatFullDateTime(item.timestamp)}
                   </span>
                   <span className={`by-badge ${item.level === 'ERROR' ? 'by-badge-danger' : item.level === 'WARN' ? 'by-badge-warning' : 'by-badge-info'}`} style={{ fontSize: '0.74rem' }}>
                     {item.level}

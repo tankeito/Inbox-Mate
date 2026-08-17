@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   ShieldCheck,
   ShieldAlert,
+  Shield,
   KeyRound,
   Lock,
   Mail,
@@ -226,11 +227,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ user, onUserUpdated 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Header */}
-      <div>
-        <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--by-text-primary)', margin: 0 }}>安全与系统配置</h2>
-        <p style={{ fontSize: '0.86rem', color: 'var(--by-text-secondary)', marginTop: '4px' }}>
-          管理管理员 2FA 双因素安全认证、IP 黑名单访问限制、登录凭据与系统底层状态
-        </p>
+      <div className="by-view-header">
+        <div>
+          <h2 className="by-view-title">
+            <Shield size={22} color="var(--by-primary)" />
+            <span>安全与系统配置</span>
+          </h2>
+          <p className="by-view-desc">
+            管理管理员 2FA 双因素安全认证、IP 黑名单访问限制、登录凭据与系统底层状态
+          </p>
+        </div>
       </div>
 
       {statusMessage && (

@@ -6,6 +6,7 @@ import type { AccountInput, EmailItem, ProviderId } from '../../shared/types.js'
 import { fetchAccountVerificationCode } from '../imap-client.js';
 import { usageLogger } from './usage-logger.js';
 import { diagLogger } from './diag-logger.js';
+import { accessTokenService } from './access-token-service.js';
 
 // Master key for encrypting credentials at rest
 function getMasterKey(): Buffer {
@@ -57,6 +58,11 @@ export interface ApiKeyItem {
   expiresAt: string | null;
   callCount: number;
   lastUsedAt: string | null;
+  tokenId?: string | null;
+  boundToken?: string | null;
+  boundTokenName?: string | null;
+  boundTokenRemaining?: number | null;
+  boundTokenTotal?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -116,6 +122,8 @@ export class ApiKeyService {
     provider?: string;
     name?: string;
     expiresInHours?: number | null;
+    tokenId?: string;
+    boundToken?: string;
     customHost?: string;
     customPort?: number;
     customProtocol?: 'imap' | 'pop3';
@@ -125,6 +133,18 @@ export class ApiKeyService {
     const email = params.email.trim().toLowerCase();
     const providerProfile = providerForEmail(email);
     const provider = params.provider || providerProfile.id;
+
+    let tokenId = params.tokenId || null;
+    let boundToken = params.boundToken || null;
+    let boundTokenName: string | null = null;
+
+    if (tokenId) {
+      const t = accessTokenService.getTokenById(tokenId);
+      if (t) {
+        boundToken = t.token;
+        boundTokenName = t.name;
+      }
+    }
 
     const authData: StoredAuthData = {
       password: params.password,
@@ -147,8 +167,8 @@ export class ApiKeyService {
       INSERT INTO api_keys (
         id, api_key, name, account_email, provider, encrypted_auth,
         auth_iv, auth_tag, is_active, expires_at, call_count,
-        last_used_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, NULL, ?, ?)
+        last_used_at, token_id, bound_token, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, NULL, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -161,6 +181,8 @@ export class ApiKeyService {
       iv,
       tag,
       expiresAt,
+      tokenId,
+      boundToken,
       nowIso,
       nowIso
     );
@@ -175,6 +197,9 @@ export class ApiKeyService {
       expiresAt,
       callCount: 0,
       lastUsedAt: null,
+      tokenId,
+      boundToken,
+      boundTokenName,
       createdAt: nowIso,
       updatedAt: nowIso
     };
@@ -186,11 +211,18 @@ export class ApiKeyService {
       defaultProvider?: string;
       expiresInHours?: number | null;
       batchName?: string;
+      tokenId?: string;
     }
   ): { totalProcessed: number; successCount: number; failedCount: number; keys: Array<ApiKeyItem & { rawPassword?: string }> } {
     const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     const results: Array<ApiKeyItem & { rawPassword?: string }> = [];
     let failedCount = 0;
+
+    let boundToken: string | undefined;
+    if (options.tokenId) {
+      const t = accessTokenService.getTokenById(options.tokenId);
+      if (t) boundToken = t.token;
+    }
 
     for (let index = 0; index < lines.length; index++) {
       const line = lines[index];
@@ -217,6 +249,8 @@ export class ApiKeyService {
         provider: parsed.provider,
         name,
         expiresInHours: options.expiresInHours,
+        tokenId: options.tokenId,
+        boundToken,
         customHost: parsed.customHost,
         customPort: parsed.customPort,
         customProtocol: parsed.customProtocol
@@ -239,6 +273,9 @@ export class ApiKeyService {
     search?: string;
     status?: 'all' | 'active' | 'expired' | 'disabled';
     provider?: string;
+    tokenId?: string;
+    startDate?: string;
+    endDate?: string;
   }): { items: ApiKeyItem[]; total: number; page: number; pageSize: number; totalPages: number } {
     const page = Math.max(1, params.page || 1);
     const pageSize = Math.min(100, Math.max(1, params.pageSize || 20));
@@ -249,37 +286,66 @@ export class ApiKeyService {
 
     if (params.search && params.search.trim()) {
       const q = `%${params.search.trim()}%`;
-      conditions.push('(account_email LIKE ? OR api_key LIKE ? OR name LIKE ?)');
-      args.push(q, q, q);
+      conditions.push('(k.account_email LIKE ? OR k.api_key LIKE ? OR k.name LIKE ? OR t.name LIKE ?)');
+      args.push(q, q, q, q);
     }
 
     if (params.provider && params.provider !== 'all') {
-      conditions.push('provider = ?');
+      conditions.push('k.provider = ?');
       args.push(params.provider);
+    }
+
+    if (params.tokenId && params.tokenId !== 'all') {
+      conditions.push('k.token_id = ?');
+      args.push(params.tokenId);
+    }
+
+    if ((params as any).startDate && (params as any).startDate.trim()) {
+      const s = (params as any).startDate.trim();
+      const startIso = s.includes('T') ? s : `${s}T00:00:00.000Z`;
+      conditions.push('k.created_at >= ?');
+      args.push(startIso);
+    }
+
+    if ((params as any).endDate && (params as any).endDate.trim()) {
+      const e = (params as any).endDate.trim();
+      const endIso = e.includes('T') ? e : `${e}T23:59:59.999Z`;
+      conditions.push('k.created_at <= ?');
+      args.push(endIso);
     }
 
     const nowIso = new Date().toISOString();
     if (params.status === 'active') {
-      conditions.push('is_active = 1 AND (expires_at IS NULL OR expires_at > ?)');
+      conditions.push('k.is_active = 1 AND (k.expires_at IS NULL OR k.expires_at > ?)');
       args.push(nowIso);
     } else if (params.status === 'expired') {
-      conditions.push('expires_at IS NOT NULL AND expires_at <= ?');
+      conditions.push('k.expires_at IS NOT NULL AND k.expires_at <= ?');
       args.push(nowIso);
     } else if (params.status === 'disabled') {
-      conditions.push('is_active = 0');
+      conditions.push('k.is_active = 0');
     }
 
     const whereClause = conditions.join(' AND ');
 
-    const countStmt = db.prepare(`SELECT COUNT(*) as count FROM api_keys WHERE ${whereClause}`);
+    const countStmt = db.prepare(`
+      SELECT COUNT(*) as count 
+      FROM api_keys k 
+      LEFT JOIN access_tokens t ON k.token_id = t.id 
+      WHERE ${whereClause}
+    `);
     const countRow = countStmt.get(...args) as any;
     const total = countRow ? countRow.count : 0;
 
     const queryStmt = db.prepare(`
-      SELECT id, api_key, name, account_email, provider, is_active, expires_at, call_count, last_used_at, created_at, updated_at
-      FROM api_keys 
+      SELECT 
+        k.id, k.api_key, k.name, k.account_email, k.provider, k.is_active, 
+        k.expires_at, k.call_count, k.last_used_at, k.token_id, k.bound_token,
+        t.name as bound_token_name, (t.total_quota - t.used_quota) as bound_token_remaining, t.total_quota as bound_token_total,
+        k.created_at, k.updated_at
+      FROM api_keys k
+      LEFT JOIN access_tokens t ON k.token_id = t.id
       WHERE ${whereClause} 
-      ORDER BY created_at DESC 
+      ORDER BY k.created_at DESC 
       LIMIT ? OFFSET ?
     `);
 
@@ -295,6 +361,11 @@ export class ApiKeyService {
       expiresAt: r.expires_at,
       callCount: r.call_count,
       lastUsedAt: r.last_used_at,
+      tokenId: r.token_id,
+      boundToken: r.bound_token,
+      boundTokenName: r.bound_token_name,
+      boundTokenRemaining: r.bound_token_remaining !== null ? Number(r.bound_token_remaining) : null,
+      boundTokenTotal: r.bound_token_total !== null ? Number(r.bound_token_total) : null,
       createdAt: r.created_at,
       updatedAt: r.updated_at
     }));
@@ -338,12 +409,15 @@ export class ApiKeyService {
     token?: string
   ): string {
     const baseUrl = domain.startsWith('http') ? domain : `https://${domain}`;
-    const tokenQuery = token && token.trim() ? `?token=${encodeURIComponent(token.trim())}` : '';
 
-    const buildUrl = (apiKey: string) => `${baseUrl}/api/${apiKey}${tokenQuery}`;
+    const buildUrl = (k: ApiKeyItem) => {
+      const activeToken = (token && token.trim()) || k.boundToken;
+      const tokenQuery = activeToken ? `?token=${encodeURIComponent(activeToken)}` : '';
+      return `${baseUrl}/api/${k.apiKey}${tokenQuery}`;
+    };
 
     if (format === 'urls') {
-      return keys.map((k) => buildUrl(k.apiKey)).join('\n');
+      return keys.map((k) => buildUrl(k)).join('\n');
     }
 
     if (format === 'json') {
@@ -352,7 +426,8 @@ export class ApiKeyService {
           email: k.accountEmail,
           provider: k.provider,
           apiKey: k.apiKey,
-          apiUrl: buildUrl(k.apiKey),
+          apiUrl: buildUrl(k),
+          token: k.boundToken || token || undefined,
           status: !k.isActive ? 'disabled' : k.expiresAt && new Date(k.expiresAt) <= new Date() ? 'expired' : 'active',
           expiresAt: k.expiresAt,
           calls: k.callCount
@@ -363,7 +438,7 @@ export class ApiKeyService {
     }
 
     if (format === 'csv') {
-      const headers = ['账号', '密码(解密)', '服务商', 'API Key', 'API URL', '状态', '有效期', '调用次数'];
+      const headers = ['账号', '密码(解密)', '服务商', 'API Key', '绑定Token', 'API URL', '状态', '有效期', '调用次数'];
       const rows = keys.map((k) => {
         let rawPass = '';
         try {
@@ -378,7 +453,8 @@ export class ApiKeyService {
           `"${rawPass}"`,
           `"${k.provider}"`,
           `"${k.apiKey}"`,
-          `"${buildUrl(k.apiKey)}"`,
+          `"${k.boundTokenName || k.boundToken || ''}"`,
+          `"${buildUrl(k)}"`,
           `"${!k.isActive ? '已禁用' : k.expiresAt && new Date(k.expiresAt) <= new Date() ? '已过期' : '生效中'}"`,
           `"${k.expiresAt || '永久有效'}"`,
           k.callCount
@@ -397,7 +473,7 @@ export class ApiKeyService {
           rawPass = decrypted.password || '';
         }
       } catch {}
-      return `账号: ${k.accountEmail} | 密码: ${rawPass} | API：${buildUrl(k.apiKey)}`;
+      return `账号: ${k.accountEmail} | 密码: ${rawPass} | API：${buildUrl(k)}`;
     });
 
     return lines.join('\n');
@@ -410,6 +486,7 @@ export class ApiKeyService {
       maxMessages?: number;
       clientIp: string;
       region?: string;
+      token?: string;
     }
   ): Promise<ApiKeyPublicResult> {
     const startTime = Date.now();
@@ -425,6 +502,22 @@ export class ApiKeyService {
 
     if (row.expires_at && new Date(row.expires_at) <= new Date()) {
       throw new Error('此 API Key 已超过有效期');
+    }
+
+    // Determine active Token: query token takes precedence, followed by bound token
+    const activeTokenStr = (options.token || row.bound_token || '').trim();
+    let verifiedToken: any = null;
+
+    if (activeTokenStr) {
+      const check = accessTokenService.verifyTokenAccess(activeTokenStr);
+      if (!check.valid) {
+        // If mailcom, strictly require valid token
+        if (row.provider === 'mailcom') {
+          throw new Error(check.reason || '关联的授权 Token 额度已用尽或已被冻结');
+        }
+      } else {
+        verifiedToken = check.token;
+      }
     }
 
     // Anti-hammering cooldown cache check
@@ -494,6 +587,27 @@ export class ApiKeyService {
       const nowIso = new Date().toISOString();
       db.prepare('UPDATE api_keys SET call_count = call_count + 1, last_used_at = ? WHERE id = ?').run(nowIso, row.id);
 
+      // Post-execution quota deduction (Only consume on Mail.com RPA success)
+      let tokenInfoPayload: any = undefined;
+      if (verifiedToken) {
+        if (provider === 'mailcom') {
+          accessTokenService.consumeQuota(verifiedToken.id);
+          tokenInfoPayload = {
+            name: verifiedToken.name,
+            usedQuota: verifiedToken.usedQuota + 1,
+            totalQuota: verifiedToken.totalQuota,
+            remainingQuota: Math.max(0, verifiedToken.remainingQuota - 1)
+          };
+        } else {
+          tokenInfoPayload = {
+            name: verifiedToken.name,
+            usedQuota: verifiedToken.usedQuota,
+            totalQuota: verifiedToken.totalQuota,
+            remainingQuota: verifiedToken.remainingQuota
+          };
+        }
+      }
+
       // Record usage log
       usageLogger.record({
         clientIp: options.clientIp,
@@ -505,7 +619,9 @@ export class ApiKeyService {
         hasCode: Boolean(codeStr),
         extractedCode: codeStr || undefined,
         durationMs,
-        messageCount: fetchResult.messages?.length || 0
+        messageCount: fetchResult.messages?.length || 0,
+        tokenId: verifiedToken?.id || row.token_id || undefined,
+        token: verifiedToken?.token || row.bound_token || undefined
       });
 
       const publicResult: ApiKeyPublicResult = {
@@ -536,9 +652,10 @@ export class ApiKeyService {
           hasCode: Boolean(m.codeMatch),
           extractedCode: m.codeMatch?.code
         })),
+        tokenInfo: tokenInfoPayload,
         queriedAt: nowIso,
         durationMs
-      };
+      } as any;
 
       // Save to cooldown cache
       apiKeyCooldownCache.set(apiKey, { result: publicResult, timestamp: Date.now() });
@@ -559,7 +676,9 @@ export class ApiKeyService {
         statusDetail: errMsg,
         hasCode: false,
         durationMs,
-        messageCount: 0
+        messageCount: 0,
+        tokenId: verifiedToken?.id || row.token_id || undefined,
+        token: verifiedToken?.token || row.bound_token || undefined
       });
 
       diagLogger.error('api', '拉取失败', errMsg, { error: String(err) }, email);

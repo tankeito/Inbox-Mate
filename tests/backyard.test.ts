@@ -170,6 +170,7 @@ describe('Backyard Management & API Engine', () => {
     it('blocks an abusive IP and detects it correctly', async () => {
       const { ipBlockService } = await import('../src/server/services/ip-block-service.js');
       const testIp = '203.0.113.42';
+      ipBlockService.unblockIp(testIp);
 
       expect(ipBlockService.isIpBlocked(testIp).blocked).toBe(false);
 
@@ -184,7 +185,7 @@ describe('Backyard Management & API Engine', () => {
       expect(check.reason).toBe('恶意大批量并发请求');
 
       const list = ipBlockService.listBlockedIps();
-      expect(list.some((item) => item.ip === testIp)).toBe(true);
+      expect(list.items.some((item) => item.ip === testIp)).toBe(true);
 
       ipBlockService.unblockIp(testIp);
       expect(ipBlockService.isIpBlocked(testIp).blocked).toBe(false);

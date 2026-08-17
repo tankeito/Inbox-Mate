@@ -229,13 +229,19 @@ export function createBackyardRouter(): express.Router {
       const search = (req.query.search as string) || '';
       const status = (req.query.status as any) || 'all';
       const provider = (req.query.provider as string) || 'all';
+      const tokenId = (req.query.tokenId as string) || undefined;
+      const startDate = (req.query.startDate as string) || undefined;
+      const endDate = (req.query.endDate as string) || undefined;
 
       const data = apiKeyService.queryKeys({
         page,
         pageSize,
         search,
         status,
-        provider
+        provider,
+        tokenId,
+        startDate,
+        endDate
       });
 
       res.json(data);
@@ -246,7 +252,7 @@ export function createBackyardRouter(): express.Router {
 
   router.post('/keys', requireAdmin, (req: Request, res: Response) => {
     try {
-      const { email, password, refreshToken, provider, name, expiresInHours, customHost, customPort, customProtocol } = req.body || {};
+      const { email, password, refreshToken, provider, name, expiresInHours, customHost, customPort, customProtocol, tokenId } = req.body || {};
       if (!email) {
         res.status(400).json({ error: '请填写邮箱账号' });
         return;
@@ -263,6 +269,7 @@ export function createBackyardRouter(): express.Router {
         provider,
         name,
         expiresInHours,
+        tokenId: typeof tokenId === 'string' ? tokenId : undefined,
         customHost,
         customPort,
         customProtocol
@@ -276,7 +283,7 @@ export function createBackyardRouter(): express.Router {
 
   router.post('/keys/batch-import', requireAdmin, (req: Request, res: Response) => {
     try {
-      const { rawText, defaultProvider, expiresInHours, batchName } = req.body || {};
+      const { rawText, defaultProvider, expiresInHours, batchName, tokenId } = req.body || {};
       if (!rawText || typeof rawText !== 'string') {
         res.status(400).json({ error: '请粘贴包含账号密码的文本内容' });
         return;
@@ -285,7 +292,8 @@ export function createBackyardRouter(): express.Router {
       const result = apiKeyService.batchImport(rawText, {
         defaultProvider,
         expiresInHours,
-        batchName
+        batchName,
+        tokenId: typeof tokenId === 'string' ? tokenId : undefined
       });
 
       res.json(result);
@@ -365,10 +373,27 @@ export function createBackyardRouter(): express.Router {
   });
 
   // Security: IP Block & Rate Limiting Management
-  router.get('/security/blocked-ips', requireAdmin, (_req: Request, res: Response) => {
+  router.get('/security/ip-analytics', requireAdmin, (req: Request, res: Response) => {
     try {
-      const list = ipBlockService.listBlockedIps();
-      res.json({ items: list, total: list.length });
+      const range = (req.query.range as string) || 'today';
+      const startDate = (req.query.startDate as string) || undefined;
+      const endDate = (req.query.endDate as string) || undefined;
+
+      const data = ipBlockService.getIpAnalytics({ range, startDate, endDate });
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '获取 IP 访问统计失败' });
+    }
+  });
+
+  router.get('/security/blocked-ips', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const search = (req.query.search as string) || '';
+      const page = Number.parseInt(req.query.page as string) || 1;
+      const pageSize = Number.parseInt(req.query.pageSize as string) || 50;
+
+      const result = ipBlockService.listBlockedIps({ search, page, pageSize });
+      res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message || '获取封禁 IP 列表失败' });
     }
@@ -386,11 +411,21 @@ export function createBackyardRouter(): express.Router {
         ip,
         reason,
         blockedBy: adminUser?.email || 'admin',
-        durationHours: durationHours ? Number(durationHours) : null
+        durationHours: durationHours !== undefined ? Number(durationHours) : null
       });
       res.json({ ok: true, item, message: `已成功限制 IP: ${ip} 的访问` });
     } catch (err: any) {
       res.status(400).json({ error: err.message || '封禁 IP 失败' });
+    }
+  });
+
+  router.post('/security/blocked-ips/:id/unban', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const id = firstParam(req.params.id);
+      const success = ipBlockService.unblockIp(id);
+      res.json({ ok: success, message: success ? '已成功解除 IP 限制' : '未找到该封禁记录' });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '解封 IP 失败' });
     }
   });
 
@@ -438,7 +473,10 @@ export function createBackyardRouter(): express.Router {
       const page = Number.parseInt(req.query.page as string) || 1;
       const pageSize = Number.parseInt(req.query.pageSize as string) || 20;
       const search = (req.query.search as string) || '';
-      const result = accessTokenService.listTokens({ page, pageSize, search });
+      const startDate = (req.query.startDate as string) || undefined;
+      const endDate = (req.query.endDate as string) || undefined;
+
+      const result = accessTokenService.listTokens({ page, pageSize, search, startDate, endDate });
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message || '获取 Token 列表失败' });
@@ -486,7 +524,10 @@ export function createBackyardRouter(): express.Router {
       const id = firstParam(req.params.id);
       const page = Number.parseInt(req.query.page as string) || 1;
       const pageSize = Number.parseInt(req.query.pageSize as string) || 20;
-      const result = accessTokenService.getTokenLogs(id, { page, pageSize });
+      const startDate = (req.query.startDate as string) || undefined;
+      const endDate = (req.query.endDate as string) || undefined;
+
+      const result = accessTokenService.getTokenLogs(id, { page, pageSize, startDate, endDate });
       res.json(result);
     } catch (err: any) {
       res.status(400).json({ error: err.message || '获取 Token 消耗日志失败' });

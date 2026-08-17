@@ -62,9 +62,22 @@ describe('Access Token Service & Quota Management', () => {
       totalQuota: 5
     });
 
-    // Use 5 times
+    // Use 5 times with audit logs
     for (let i = 0; i < 5; i++) {
       accessTokenService.consumeQuota(token.id);
+      usageLogger.record({
+        clientIp: '127.0.0.1',
+        emailAccount: `recharge_test_${i}@mail.com`,
+        provider: 'mailcom',
+        sourceMode: 'api_key',
+        status: 'success',
+        hasCode: true,
+        extractedCode: String(100000 + i),
+        durationMs: 1200 + i * 100,
+        messageCount: 1,
+        tokenId: token.id,
+        token: token.token
+      });
     }
     expect(accessTokenService.verifyTokenAccess(token.token).valid).toBe(false);
 
@@ -74,6 +87,11 @@ describe('Access Token Service & Quota Management', () => {
     expect(updated.usedQuota).toBe(5);
     expect(updated.remainingQuota).toBe(10);
     expect(updated.isExhausted).toBe(false);
+
+    // Check token audit logs
+    const tokenLogs = accessTokenService.getTokenLogs(token.id);
+    expect(tokenLogs.total).toBe(5);
+    expect(tokenLogs.items.length).toBe(5);
 
     // Verify access is restored
     const check = accessTokenService.verifyTokenAccess(token.token);

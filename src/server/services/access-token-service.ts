@@ -201,6 +201,8 @@ export class AccessTokenService {
     page?: number;
     pageSize?: number;
     search?: string;
+    startDate?: string;
+    endDate?: string;
   }): {
     items: FormattedAccessToken[];
     total: number;
@@ -220,13 +222,29 @@ export class AccessTokenService {
     const offset = (page - 1) * pageSize;
     const search = params?.search?.trim() || '';
 
-    let whereClause = '';
+    const conditions: string[] = [];
     const queryParams: any[] = [];
 
     if (search) {
-      whereClause = 'WHERE name LIKE ? OR token LIKE ?';
+      conditions.push('(name LIKE ? OR token LIKE ?)');
       queryParams.push(`%${search}%`, `%${search}%`);
     }
+
+    if (params?.startDate && params.startDate.trim()) {
+      const s = params.startDate.trim();
+      const startIso = s.includes('T') ? s : `${s}T00:00:00.000Z`;
+      conditions.push('created_at >= ?');
+      queryParams.push(startIso);
+    }
+
+    if (params?.endDate && params.endDate.trim()) {
+      const e = params.endDate.trim();
+      const endIso = e.includes('T') ? e : `${e}T23:59:59.999Z`;
+      conditions.push('created_at <= ?');
+      queryParams.push(endIso);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const countStmt = db.prepare(`SELECT COUNT(*) as count FROM access_tokens ${whereClause}`);
     const totalRow = countStmt.get(...queryParams) as unknown as { count: number };
@@ -276,7 +294,7 @@ export class AccessTokenService {
    */
   getTokenLogs(
     idOrToken: string,
-    params?: { page?: number; pageSize?: number }
+    params?: { page?: number; pageSize?: number; startDate?: string; endDate?: string }
   ): {
     token: FormattedAccessToken;
     items: UsageLogItem[];
@@ -292,33 +310,66 @@ export class AccessTokenService {
 
     const page = Math.max(1, params?.page || 1);
     const pageSize = Math.max(1, Math.min(100, params?.pageSize || 20));
+    const offset = (page - 1) * pageSize;
 
-    const result = usageLogger.query({
-      page,
-      pageSize,
-      tokenId: token.id
-    });
+    const conditions: string[] = ['(token_id = ? OR token = ?)'];
+    const args: any[] = [token.id, token.token];
 
-    // If query by tokenId returns 0, also fallback check if query by token string yields items
-    let finalResult = result;
-    if (result.total === 0) {
-      const fallbackResult = usageLogger.query({
-        page,
-        pageSize,
-        token: token.token
-      });
-      if (fallbackResult.total > 0) {
-        finalResult = fallbackResult;
-      }
+    if (params?.startDate && params.startDate.trim()) {
+      const s = params.startDate.trim();
+      const startIso = s.includes('T') ? s : `${s}T00:00:00.000Z`;
+      conditions.push('created_at >= ?');
+      args.push(startIso);
     }
+
+    if (params?.endDate && params.endDate.trim()) {
+      const e = params.endDate.trim();
+      const endIso = e.includes('T') ? e : `${e}T23:59:59.999Z`;
+      conditions.push('created_at <= ?');
+      args.push(endIso);
+    }
+
+    const whereClause = `WHERE ${conditions.join(' AND ')}`;
+
+    const countStmt = db.prepare(`SELECT COUNT(*) as count FROM usage_logs ${whereClause}`);
+    const countRes = countStmt.get(...args) as any;
+    const total = countRes ? countRes.count : 0;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+    const listStmt = db.prepare(`
+      SELECT * FROM usage_logs
+      ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `);
+    const rows = listStmt.all(...args, pageSize, offset) as any[];
+
+    const items: UsageLogItem[] = rows.map((r) => ({
+      id: r.id,
+      clientIp: r.client_ip,
+      region: r.region,
+      emailAccount: r.email_account,
+      emailDomain: r.email_domain,
+      provider: r.provider,
+      sourceMode: r.source_mode,
+      status: r.status,
+      statusDetail: r.status_detail,
+      hasCode: Boolean(r.has_code),
+      extractedCode: r.extracted_code,
+      durationMs: r.duration_ms,
+      messageCount: r.message_count,
+      tokenId: r.token_id || undefined,
+      token: r.token || undefined,
+      createdAt: r.created_at
+    }));
 
     return {
       token,
-      items: finalResult.items,
-      total: finalResult.total,
-      page: finalResult.page,
-      pageSize: finalResult.pageSize,
-      totalPages: finalResult.totalPages
+      items,
+      total,
+      page,
+      pageSize,
+      totalPages
     };
   }
 }

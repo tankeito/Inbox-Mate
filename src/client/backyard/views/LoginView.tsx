@@ -165,7 +165,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
             width: '54px',
             height: '54px',
             borderRadius: '16px',
-            background: 'linear-gradient(135deg, #0284c7, #0ea5e9)',
+            background: 'linear-gradient(135deg, #0ea5e9, #6366f1)',
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -173,7 +173,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
             boxShadow: '0 8px 24px rgba(14, 165, 233, 0.3)',
             marginBottom: '16px'
           }}>
-            <Shield size={28} />
+            <Mail size={26} strokeWidth={2.4} />
           </div>
           <h1 style={{ fontSize: '1.45rem', fontWeight: 700, color: 'var(--by-text-primary)', letterSpacing: '-0.02em', margin: 0 }}>
             Inbox Mate 后台管理

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   Key,
   Plus,
@@ -22,11 +22,18 @@ import {
   FileSpreadsheet,
   FileCode,
   ListFilter,
-  X
+  FileText,
+  KeyRound,
+  Zap,
+  FolderUp,
+  X,
+  ChevronDown
 } from 'lucide-react';
 import { backyardApi } from '../api';
 import type { ApiKeyItem, AccessTokenItem } from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { formatDuration, formatFullDateTime, type DatePreset } from '../../../shared/format-utils';
+import { DateRangeFilter } from '../components/DateRangeFilter';
 
 export const ApiKeyView: React.FC = () => {
   const [keys, setKeys] = useState<ApiKeyItem[]>([]);
@@ -40,6 +47,10 @@ export const ApiKeyView: React.FC = () => {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('all');
   const [provider, setProvider] = useState('all');
+  const [tokenFilter, setTokenFilter] = useState('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [activePreset, setActivePreset] = useState<DatePreset | 'custom' | null>(null);
 
   // Selection for Batch Export
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -54,13 +65,30 @@ export const ApiKeyView: React.FC = () => {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
-  // Import Modal State
+  // Import Modal State & TXT File
   const [importText, setImportText] = useState('');
   const [importProvider, setImportProvider] = useState('smart');
   const [importExpiry, setImportExpiry] = useState('0');
   const [importBatchName, setImportBatchName] = useState('');
+  const [importTokenId, setImportTokenId] = useState('');
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<any | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadedFile, setUploadedFile] = useState<{ name: string; size: number } | null>(null);
+
+  // Quick Token Creation inside Import Modal
+  const [showQuickTokenPanel, setShowQuickTokenPanel] = useState(false);
+  const [quickTokenName, setQuickTokenName] = useState('');
+  const [quickTokenQuota, setQuickTokenQuota] = useState(20);
+  const [quickTokenDuration, setQuickTokenDuration] = useState('0');
+  const [quickTokenLoading, setQuickTokenLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Searchable Token Select Dropdown State
+  const [tokenDropdownOpen, setTokenDropdownOpen] = useState(false);
+  const [tokenSearchQuery, setTokenSearchQuery] = useState('');
+  const [tokenDisplayCount, setTokenDisplayCount] = useState(10);
+  const tokenDropdownRef = useRef<HTMLDivElement>(null);
 
   // Export Modal State & Token Binding
   const [showExportModal, setShowExportModal] = useState(false);
@@ -85,7 +113,10 @@ export const ApiKeyView: React.FC = () => {
         pageSize,
         search,
         status,
-        provider
+        provider,
+        tokenId: tokenFilter !== 'all' ? tokenFilter : undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined
       });
       setKeys(res.items);
       setTotal(res.total);
@@ -97,9 +128,44 @@ export const ApiKeyView: React.FC = () => {
     }
   };
 
+  const handleDateChange = (start: string, end: string, preset?: DatePreset | 'custom' | null) => {
+    setStartDate(start);
+    setEndDate(end);
+    setActivePreset(preset || null);
+    setPage(1);
+  };
+
+  const loadAvailableTokens = async () => {
+    try {
+      const res = await backyardApi.getTokens({ pageSize: 100 });
+      const activeTokens = res.items.filter((t) => t.isActive && !t.isExhausted);
+      setAvailableTokens(activeTokens);
+      if (activeTokens.length > 0 && !importTokenId) {
+        setImportTokenId(activeTokens[0].id);
+      }
+    } catch (err) {
+      console.error('Failed to load tokens:', err);
+    }
+  };
+
+  // Click outside to close token dropdown
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (tokenDropdownRef.current && !tokenDropdownRef.current.contains(e.target as Node)) {
+        setTokenDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   useEffect(() => {
     fetchKeys();
-  }, [page, pageSize, status, provider]);
+  }, [page, pageSize, status, provider, tokenFilter, startDate, endDate]);
+
+  useEffect(() => {
+    loadAvailableTokens();
+  }, []);
 
   const handleCopyUrl = (apiKey: string) => {
     const origin = window.location.origin;
@@ -134,9 +200,84 @@ export const ApiKeyView: React.FC = () => {
     }
   };
 
+  const handleTxtFile = (file: File) => {
+    if (!file.name.endsWith('.txt') && file.type !== 'text/plain') {
+      alert('请上传 .txt 纯文本文件');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = (e.target?.result as string) || '';
+      setImportText(text);
+      setUploadedFile({ name: file.name, size: file.size });
+      if (!importBatchName) {
+        setImportBatchName(file.name.replace(/\.txt$/i, ''));
+      }
+    };
+    reader.readAsText(file, 'utf-8');
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleTxtFile(file);
+    }
+  };
+
+  const handleFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      handleTxtFile(file);
+    }
+  };
+
+  const handleOpenImport = () => {
+    setShowImportModal(true);
+    setImportResult(null);
+    setUploadedFile(null);
+    setImportText('');
+    loadAvailableTokens();
+  };
+
+  const handleQuickCreateToken = async () => {
+    if (!quickTokenName.trim()) {
+      alert('请填写 Token 备注名称');
+      return;
+    }
+    setQuickTokenLoading(true);
+    try {
+      const duration = Number(quickTokenDuration);
+      const newTok = await backyardApi.createToken({
+        name: quickTokenName.trim(),
+        totalQuota: Number(quickTokenQuota) || 20,
+        durationDays: duration > 0 ? duration : null
+      });
+      await loadAvailableTokens();
+      if (newTok?.token?.id) {
+        setImportTokenId(newTok.token.id);
+      }
+      setShowQuickTokenPanel(false);
+      setQuickTokenName('');
+    } catch (err: any) {
+      alert(err.message || '发行 Token 失败');
+    } finally {
+      setQuickTokenLoading(false);
+    }
+  };
+
   const handleBatchImportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!importText.trim()) return;
+    if (!importText.trim()) {
+      alert('请粘贴账号密码或上传 .txt 文件');
+      return;
+    }
+
+    if (!importTokenId) {
+      alert('请选择需要绑定的授权 Token（必选项），若无可用 Token 请点击【快速发行新 Token】');
+      return;
+    }
 
     setImporting(true);
     setImportResult(null);
@@ -147,7 +288,8 @@ export const ApiKeyView: React.FC = () => {
         rawText: importText,
         defaultProvider: importProvider,
         expiresInHours: hours > 0 ? hours : null,
-        batchName: importBatchName || undefined
+        batchName: importBatchName || undefined,
+        tokenId: importTokenId
       });
       setImportResult(res);
       fetchKeys();
@@ -163,7 +305,6 @@ export const ApiKeyView: React.FC = () => {
     setExportFormat(format);
     setExporting(true);
     try {
-      // Load available active tokens for selection
       const tokenRes = await backyardApi.getTokens({ pageSize: 100 });
       setAvailableTokens(tokenRes.items.filter((t) => t.isActive && !t.isExhausted));
 
@@ -245,29 +386,32 @@ export const ApiKeyView: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Header & Quick Action Buttons */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+      <div className="by-view-header">
         <div>
-          <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--by-text-primary)', margin: 0 }}>API Key 密钥管理</h2>
-          <p style={{ fontSize: '0.86rem', color: 'var(--by-text-secondary)', marginTop: '4px' }}>
+          <h2 className="by-view-title">
+            <Key size={22} color="var(--by-primary)" />
+            <span>API Key 密钥管理</span>
+          </h2>
+          <p className="by-view-desc">
             支持批量导入账号密码生成公共拉取 API，凭据经 AES-256-GCM 强加密保存
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div className="by-view-actions">
           <button className="by-btn by-btn-secondary" onClick={() => handleOpenExport('custom')}>
-            <Download size={16} /> 批量导出
+            <Download size={15} /> 批量导出
           </button>
-          <button className="by-btn by-btn-primary" onClick={() => { setShowImportModal(true); setImportResult(null); }}>
-            <Upload size={16} /> 批量导入生成
+          <button className="by-btn by-btn-primary" onClick={handleOpenImport}>
+            <Upload size={15} /> 批量导入生成
           </button>
         </div>
       </div>
 
       {/* Filter Bar */}
-      <div className="by-card" style={{ padding: '16px' }}>
+      <div className="by-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
         <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-          <div style={{ flex: '1 1 240px', position: 'relative' }}>
+          <div style={{ flex: '1 1 220px', position: 'relative' }}>
             <input
               type="text"
               className="by-input"
@@ -289,7 +433,7 @@ export const ApiKeyView: React.FC = () => {
             </select>
           </div>
 
-          <div style={{ minWidth: '160px', flex: '0 1 auto' }}>
+          <div style={{ minWidth: '150px', flex: '0 1 auto' }}>
             <select className="by-select" value={provider} onChange={(e) => { setProvider(e.target.value); setPage(1); }}>
               <option value="all">全部邮箱类型</option>
               <option value="mailcom">Mail.com</option>
@@ -300,9 +444,29 @@ export const ApiKeyView: React.FC = () => {
             </select>
           </div>
 
+          <div style={{ minWidth: '170px', flex: '0 1 auto' }}>
+            <select className="by-select" value={tokenFilter} onChange={(e) => { setTokenFilter(e.target.value); setPage(1); }}>
+              <option value="all">全部绑定 Token</option>
+              {availableTokens.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} (余{t.remainingQuota}次)
+                </option>
+              ))}
+            </select>
+          </div>
+
           <button className="by-btn by-btn-secondary" onClick={fetchKeys} disabled={loading}>
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> 刷新
           </button>
+        </div>
+
+        <div style={{ borderTop: '1px solid var(--by-border)', paddingTop: '10px' }}>
+          <DateRangeFilter
+            startDate={startDate}
+            endDate={endDate}
+            activePreset={activePreset}
+            onChange={handleDateChange}
+          />
         </div>
       </div>
 
@@ -314,6 +478,7 @@ export const ApiKeyView: React.FC = () => {
               <tr>
                 <th>邮箱账号</th>
                 <th>服务商</th>
+                <th>绑定授权 Token</th>
                 <th>API 访问地址 (一键复制)</th>
                 <th>状态</th>
                 <th>有效期</th>
@@ -325,14 +490,14 @@ export const ApiKeyView: React.FC = () => {
             <tbody>
               {loading && keys.length === 0 ? (
                 <tr>
-                  <td colSpan={8} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-secondary)' }}>
+                  <td colSpan={9} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-secondary)' }}>
                     <RefreshCw size={20} className="animate-spin" style={{ margin: '0 auto 8px auto' }} />
                     正在载入 API Key 列表...
                   </td>
                 </tr>
               ) : keys.length === 0 ? (
                 <tr>
-                  <td colSpan={8} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-muted)' }}>
+                  <td colSpan={9} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-muted)' }}>
                     暂无 API Key，请点击右上角【批量导入生成】快速生成
                   </td>
                 </tr>
@@ -340,7 +505,8 @@ export const ApiKeyView: React.FC = () => {
                 keys.map((item) => {
                   const isExpired = item.expiresAt && new Date(item.expiresAt) <= new Date();
                   const origin = window.location.origin;
-                  const fullUrl = `${origin}/${item.apiKey}`;
+                  const tokenQuery = item.boundToken ? `?token=${encodeURIComponent(item.boundToken)}` : '';
+                  const fullUrl = `${origin}/api/${item.apiKey}${tokenQuery}`;
 
                   return (
                     <tr key={item.id}>
@@ -355,6 +521,27 @@ export const ApiKeyView: React.FC = () => {
                         <span style={{ textTransform: 'capitalize', color: 'var(--by-text-secondary)', fontSize: '0.84rem' }}>
                           {item.provider === 'mailcom' ? 'Mail.com' : item.provider}
                         </span>
+                      </td>
+
+                      <td data-label="绑定授权 Token">
+                        {item.boundToken ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                            <span
+                              className="by-badge by-badge-info"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                              title={`Token: ${item.boundToken}`}
+                            >
+                              <KeyRound size={11} /> {item.boundTokenName || item.boundToken.slice(0, 10) + '...'}
+                            </span>
+                            {item.boundTokenRemaining !== null && item.boundTokenRemaining !== undefined && (
+                              <span style={{ fontSize: '0.72rem', color: 'var(--by-text-muted)', fontFamily: 'var(--by-font-mono)' }}>
+                                剩余 {item.boundTokenRemaining} 次
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: '0.78rem', color: 'var(--by-text-muted)' }}>未绑定</span>
+                        )}
                       </td>
 
                       <td data-label="API 访问地址">
@@ -372,7 +559,7 @@ export const ApiKeyView: React.FC = () => {
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap'
                           }}>
-                            /{item.apiKey}
+                            /api/{item.apiKey}{tokenQuery}
                           </code>
                           <button
                             onClick={() => handleCopyUrl(item.apiKey)}
@@ -397,7 +584,7 @@ export const ApiKeyView: React.FC = () => {
                       </td>
 
                       <td data-label="有效期" style={{ fontSize: '0.82rem', color: 'var(--by-text-secondary)' }}>
-                        {item.expiresAt ? new Date(item.expiresAt).toLocaleDateString() : '永久有效'}
+                        {item.expiresAt ? formatFullDateTime(item.expiresAt) : '永久有效'}
                       </td>
 
                       <td data-label="调用次数" style={{ fontFamily: 'var(--by-font-mono)', color: 'var(--by-text-primary)', fontWeight: 600 }}>
@@ -405,14 +592,7 @@ export const ApiKeyView: React.FC = () => {
                       </td>
 
                       <td data-label="最后使用" style={{ fontSize: '0.8rem', color: 'var(--by-text-muted)' }}>
-                        {item.lastUsedAt
-                          ? new Date(item.lastUsedAt).toLocaleDateString('zh-CN', {
-                              month: '2-digit',
-                              day: '2-digit',
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            })
-                          : '从未调用'}
+                        {item.lastUsedAt ? formatFullDateTime(item.lastUsedAt) : '从未调用'}
                       </td>
 
                       <td data-label="操作">
@@ -497,7 +677,7 @@ export const ApiKeyView: React.FC = () => {
           <button className="by-btn by-btn-secondary by-btn-sm" onClick={() => handleOpenExport('custom')}>
             <Download size={14} /> 导出
           </button>
-          <button className="by-btn by-btn-primary by-btn-sm" onClick={() => setShowImportModal(true)}>
+          <button className="by-btn by-btn-primary by-btn-sm" onClick={handleOpenImport}>
             <Plus size={14} /> 批量导入
           </button>
         </div>
@@ -519,24 +699,286 @@ export const ApiKeyView: React.FC = () => {
             <form onSubmit={handleBatchImportSubmit}>
               <div className="by-modal-body">
                 <div style={{ marginBottom: '14px', fontSize: '0.84rem', color: 'var(--by-text-secondary)', lineHeight: 1.5 }}>
-                  支持任意格式粘贴（系统智能识别邮箱和密码），如：<br />
+                  支持任意格式文本粘贴或直接上传 <code>.txt</code> 文件（系统智能识别邮箱和密码），如：<br />
                   <code style={{ color: 'var(--by-text-code)' }}>账号: anais_officiavhr@mail.com | 密码: oL9KZDccB</code><br />
                   <code style={{ color: 'var(--by-text-code)' }}>user@mail.com----mypassword</code> 或 <code style={{ color: 'var(--by-text-code)' }}>user@domain.com:password</code>
                 </div>
 
+                {/* TXT File Drag & Drop Zone */}
+                <div
+                  className={`by-file-dropzone ${isDragging ? 'dragging' : ''}`}
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleFileDrop}
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{
+                    border: '2px dashed var(--by-border-strong)',
+                    borderRadius: '8px',
+                    padding: '10px 14px',
+                    textAlign: 'center',
+                    background: isDragging ? 'var(--by-info-bg)' : 'var(--by-bg-input)',
+                    cursor: 'pointer',
+                    marginBottom: '10px',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  <input
+                    type="file"
+                    accept=".txt,text/plain"
+                    ref={fileInputRef}
+                    onChange={handleFileInputChange}
+                    style={{ display: 'none' }}
+                  />
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', color: 'var(--by-primary)' }}>
+                    <FolderUp size={18} />
+                    <span style={{ fontSize: '0.84rem', fontWeight: 600 }}>点击选择或拖拽 .txt 文件至此处导入</span>
+                  </div>
+                  {uploadedFile ? (
+                    <div style={{ marginTop: '4px', fontSize: '0.76rem', color: 'var(--by-success)', fontWeight: 600 }}>
+                      ✓ 已成功读取文件: {uploadedFile.name} ({(uploadedFile.size / 1024).toFixed(1)} KB)
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: '2px', fontSize: '0.72rem', color: 'var(--by-text-muted)' }}>
+                      支持纯文本文件，读取后将自动填入下方输入框
+                    </div>
+                  )}
+                </div>
+
                 <div className="by-input-group">
-                  <label className="by-label">粘贴账号密码文本 (一行一个)</label>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <label className="by-label" style={{ margin: 0, fontSize: '0.82rem' }}>粘贴账号密码文本 (一行一个)</label>
+                    {importText && (
+                      <button
+                        type="button"
+                        className="by-btn-icon"
+                        onClick={() => { setImportText(''); setUploadedFile(null); }}
+                        style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)' }}
+                      >
+                        清空文本
+                      </button>
+                    )}
+                  </div>
                   <textarea
                     className="by-textarea"
-                    rows={7}
+                    rows={3}
                     placeholder={`账号: anais_officiavhr@mail.com | 密码: oL9KZDccB\n账号: test_user@outlook.com | 密码: mypassword123`}
                     value={importText}
                     onChange={(e) => setImportText(e.target.value)}
+                    style={{ minHeight: '68px', maxHeight: '110px', fontSize: '0.82rem' }}
                     required
                   />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '14px' }}>
+                {/* Token Binding Selector (Mandatory) & Quick Issuer */}
+                <div style={{
+                  margin: '14px 0',
+                  background: 'var(--by-bg-card-subtle)',
+                  padding: '14px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--by-border)'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <label className="by-label" style={{ margin: 0, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <KeyRound size={15} color="var(--by-primary)" />
+                      <span>归属授权 Token <span style={{ color: 'var(--by-danger)' }}>* (必选)</span></span>
+                    </label>
+                    <button
+                      type="button"
+                      className="by-btn by-btn-secondary by-btn-sm"
+                      onClick={() => setShowQuickTokenPanel(!showQuickTokenPanel)}
+                      style={{ fontSize: '0.76rem', padding: '3px 8px' }}
+                    >
+                      <Plus size={13} /> 快速发行新 Token
+                    </button>
+                  </div>
+
+                  {/* Searchable & Scrollable Token Select Dropdown */}
+                  <div className="by-token-select-container" ref={tokenDropdownRef}>
+                    <div
+                      className={`by-token-select-trigger ${tokenDropdownOpen ? 'active' : ''}`}
+                      onClick={() => {
+                        setTokenDropdownOpen(!tokenDropdownOpen);
+                        if (!tokenDropdownOpen) {
+                          setTokenDisplayCount(10);
+                          setTokenSearchQuery('');
+                        }
+                      }}
+                    >
+                      {(() => {
+                        const sel = availableTokens.find((t) => t.id === importTokenId);
+                        if (sel) {
+                          return (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, overflow: 'hidden', flex: 1 }}>
+                              <KeyRound size={14} color="var(--by-primary)" style={{ flexShrink: 0 }} />
+                              <span style={{ fontWeight: 600, color: 'var(--by-text-primary)', whiteSpace: 'nowrap' }}>{sel.name}</span>
+                              <span style={{ fontSize: '0.74rem', color: 'var(--by-success)', background: 'var(--by-success-bg)', padding: '1px 6px', borderRadius: '4px', whiteSpace: 'nowrap' }}>
+                                剩余 {sel.remainingQuota}/{sel.totalQuota} 次
+                              </span>
+                              <span style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)', fontFamily: 'var(--by-font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                - {sel.token.slice(0, 16)}...
+                              </span>
+                            </div>
+                          );
+                        }
+                        return <span style={{ color: 'var(--by-text-muted)' }}>-- 请输入或选择要绑定的授权 Token (必选项) --</span>;
+                      })()}
+                      <ChevronDown size={15} style={{ color: 'var(--by-text-muted)', transform: tokenDropdownOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease', flexShrink: 0, marginLeft: '8px' }} />
+                    </div>
+
+                    {tokenDropdownOpen && (
+                      <div className="by-token-dropdown-menu">
+                        <div className="by-token-search-header">
+                          <Search size={14} color="var(--by-text-muted)" />
+                          <input
+                            type="text"
+                            className="by-token-search-input"
+                            placeholder="按 Token 备注名称或密钥字符检索..."
+                            value={tokenSearchQuery}
+                            autoFocus
+                            onChange={(e) => {
+                              setTokenSearchQuery(e.target.value);
+                              setTokenDisplayCount(10);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          {tokenSearchQuery && (
+                            <button
+                              type="button"
+                              className="by-btn-icon"
+                              style={{ width: '18px', height: '18px', padding: 0 }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTokenSearchQuery('');
+                                setTokenDisplayCount(10);
+                              }}
+                            >
+                              <X size={12} />
+                            </button>
+                          )}
+                        </div>
+
+                        {(() => {
+                          const q = tokenSearchQuery.trim().toLowerCase();
+                          const filtered = availableTokens.filter((t) => {
+                            if (!q) return true;
+                            return t.name.toLowerCase().includes(q) || t.token.toLowerCase().includes(q);
+                          });
+                          const visible = filtered.slice(0, tokenDisplayCount);
+
+                          return (
+                            <div
+                              className="by-token-list-scroll"
+                              onScroll={(e) => {
+                                const target = e.currentTarget;
+                                if (target.scrollTop + target.clientHeight >= target.scrollHeight - 15) {
+                                  if (tokenDisplayCount < filtered.length) {
+                                    setTokenDisplayCount((prev) => prev + 10);
+                                  }
+                                }
+                              }}
+                            >
+                              {visible.length === 0 ? (
+                                <div style={{ padding: '16px', textAlign: 'center', color: 'var(--by-text-muted)', fontSize: '0.82rem' }}>
+                                  未检索到匹配的授权 Token
+                                </div>
+                              ) : (
+                                visible.map((t) => {
+                                  const isSelected = t.id === importTokenId;
+                                  return (
+                                    <div
+                                      key={t.id}
+                                      className={`by-token-item ${isSelected ? 'selected' : ''}`}
+                                      onClick={() => {
+                                        setImportTokenId(t.id);
+                                        setTokenDropdownOpen(false);
+                                      }}
+                                    >
+                                      <div style={{ minWidth: 0, flex: 1 }}>
+                                        <div className="by-token-item-name">
+                                          <span>{t.name}</span>
+                                          <span style={{ fontSize: '0.72rem', color: 'var(--by-success)', background: 'var(--by-success-bg)', padding: '1px 5px', borderRadius: '4px', fontWeight: 500 }}>
+                                            余 {t.remainingQuota}/{t.totalQuota} 次
+                                          </span>
+                                        </div>
+                                        <div className="by-token-item-sub">
+                                          {t.token}
+                                        </div>
+                                      </div>
+                                      {isSelected && <Check size={14} color="var(--by-primary)" style={{ flexShrink: 0, marginLeft: '8px' }} />}
+                                    </div>
+                                  );
+                                })
+                              )}
+
+                              {filtered.length > tokenDisplayCount && (
+                                <div style={{ padding: '6px', textAlign: 'center', color: 'var(--by-text-muted)', fontSize: '0.74rem' }}>
+                                  向下滚动加载更多 (已展示 {visible.length} / 共 {filtered.length} 条)...
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)', marginTop: '6px' }}>
+                    强绑定后，该批次生成的每个 API Key 调取抓取时将自动从所选 Token 扣费，便于精细化追踪与成本控制。
+                  </div>
+
+                  {/* Inline Quick Token Creation Panel */}
+                  {showQuickTokenPanel && (
+                    <div style={{
+                      marginTop: '12px',
+                      padding: '12px',
+                      background: 'var(--by-bg-input)',
+                      borderRadius: '6px',
+                      border: '1px dashed var(--by-primary)'
+                    }}>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--by-primary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Zap size={14} /> 极速发行新 Token 并自动绑定
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '8px', alignItems: 'center' }}>
+                        <input
+                          type="text"
+                          className="by-input"
+                          placeholder="Token 备注名称 (如: 8月17日批次)"
+                          value={quickTokenName}
+                          onChange={(e) => setQuickTokenName(e.target.value)}
+                          style={{ fontSize: '0.82rem' }}
+                        />
+                        <input
+                          type="number"
+                          className="by-input"
+                          placeholder="额度次数"
+                          value={quickTokenQuota}
+                          onChange={(e) => setQuickTokenQuota(Math.max(1, Number(e.target.value)))}
+                          min={1}
+                          style={{ fontSize: '0.82rem' }}
+                        />
+                        <select
+                          className="by-select"
+                          value={quickTokenDuration}
+                          onChange={(e) => setQuickTokenDuration(e.target.value)}
+                          style={{ fontSize: '0.82rem' }}
+                        >
+                          <option value="0">永久有效</option>
+                          <option value="7">7 天</option>
+                          <option value="30">30 天</option>
+                        </select>
+                        <button
+                          type="button"
+                          className="by-btn by-btn-primary by-btn-sm"
+                          onClick={handleQuickCreateToken}
+                          disabled={quickTokenLoading || !quickTokenName.trim()}
+                        >
+                          {quickTokenLoading ? '发行中...' : '立即发行'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
                   <div className="by-input-group">
                     <label className="by-label">邮箱类型 / 协议</label>
                     <select className="by-select" value={importProvider} onChange={(e) => setImportProvider(e.target.value)}>
@@ -562,7 +1004,7 @@ export const ApiKeyView: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="by-input-group">
+                <div className="by-input-group" style={{ marginTop: '14px' }}>
                   <label className="by-label">批量批次名称 / 备注 (可选)</label>
                   <input
                     type="text"
@@ -609,7 +1051,7 @@ export const ApiKeyView: React.FC = () => {
                 <button type="button" className="by-btn by-btn-secondary" onClick={() => setShowImportModal(false)}>
                   取消
                 </button>
-                <button type="submit" className="by-btn by-btn-primary" disabled={importing || !importText.trim()}>
+                <button type="submit" className="by-btn by-btn-primary" disabled={importing || !importText.trim() || !importTokenId}>
                   {importing ? '正在生成...' : '立即批量生成 API Key'}
                 </button>
               </div>
@@ -776,7 +1218,7 @@ export const ApiKeyView: React.FC = () => {
                       </div>
                     </div>
                     <div style={{ textAlign: 'right', fontSize: '0.78rem', color: 'var(--by-text-secondary)' }}>
-                      耗时: {testResult.durationMs}ms<br />
+                      耗时: {formatDuration(testResult.durationMs)}<br />
                       共拉取: {testResult.messageCount} 封邮件
                     </div>
                   </div>

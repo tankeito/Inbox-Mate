@@ -218,19 +218,9 @@ export function createServer(port = PORT) {
         lookbackMinutes: lookback,
         maxMessages: max,
         clientIp,
-        region
+        region,
+        token: tokenStr || undefined
       });
-
-      // Post-execution quota deduction (Deduct ONLY when fetch succeeds!)
-      if (verifiedToken) {
-        accessTokenService.consumeQuota(verifiedToken.id);
-        (result as any).tokenInfo = {
-          name: verifiedToken.name,
-          usedQuota: verifiedToken.usedQuota + 1,
-          totalQuota: verifiedToken.totalQuota,
-          remainingQuota: Math.max(0, verifiedToken.remainingQuota - 1)
-        };
-      }
 
       if (format === 'code' || format === 'text') {
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');

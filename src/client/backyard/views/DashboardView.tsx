@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  LayoutDashboard,
   Activity,
   CheckCircle2,
   Key,
@@ -22,6 +23,7 @@ import {
 import { backyardApi } from '../api';
 import type { DashboardStats, RpaStatusData } from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { formatDuration } from '../../../shared/format-utils';
 
 interface DashboardViewProps {
   onNavigate: (tab: string) => void;
@@ -75,19 +77,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Top Banner / Actions */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+      <div className="by-view-header">
         <div>
-          <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--by-text-primary)', margin: 0 }}>控制台总览</h2>
-          <p style={{ fontSize: '0.86rem', color: 'var(--by-text-secondary)', marginTop: '4px' }}>
+          <h2 className="by-view-title">
+            <LayoutDashboard size={22} color="var(--by-primary)" />
+            <span>控制台总览</span>
+          </h2>
+          <p className="by-view-desc">
             实时系统负载、Chrome RPA 状态、使用情况审计与 API 调度指标
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div className="by-view-actions">
           <button className="by-btn by-btn-secondary" onClick={loadData} disabled={loading}>
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> 刷新数据
+            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> 刷新数据
           </button>
           <button className="by-btn by-btn-primary" onClick={() => onNavigate('keys')}>
-            <Key size={16} /> API Key 管理
+            <Key size={15} /> API Key 管理
           </button>
         </div>
       </div>
@@ -213,7 +218,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             <span>平均处理耗时</span>
             <Clock size={16} color="#ec4899" />
           </div>
-          <div className="by-stat-value">{stats?.avgDurationMs ?? 0} <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>ms</span></div>
+          <div className="by-stat-value">{formatDuration(stats?.avgDurationMs)}</div>
           <div className="by-stat-sub">IMAP & Playwright RPA</div>
         </div>
       </div>

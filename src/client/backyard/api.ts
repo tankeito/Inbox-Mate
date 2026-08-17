@@ -103,6 +103,8 @@ export const backyardApi = {
     status?: string;
     provider?: string;
     sourceMode?: string;
+    startDate?: string;
+    endDate?: string;
   }) {
     const query = new URLSearchParams();
     if (params.page) query.set('page', params.page.toString());
@@ -111,16 +113,20 @@ export const backyardApi = {
     if (params.status && params.status !== 'all') query.set('status', params.status);
     if (params.provider && params.provider !== 'all') query.set('provider', params.provider);
     if (params.sourceMode && params.sourceMode !== 'all') query.set('sourceMode', params.sourceMode);
+    if (params.startDate) query.set('startDate', params.startDate);
+    if (params.endDate) query.set('endDate', params.endDate);
 
     return request<PagedResult<UsageLogItem>>(`/logs?${query.toString()}`);
   },
 
-  getExportLogsUrl(params: { search?: string; status?: string; provider?: string; sourceMode?: string }) {
+  getExportLogsUrl(params: { search?: string; status?: string; provider?: string; sourceMode?: string; startDate?: string; endDate?: string }) {
     const query = new URLSearchParams();
     if (params.search) query.set('search', params.search);
     if (params.status && params.status !== 'all') query.set('status', params.status);
     if (params.provider && params.provider !== 'all') query.set('provider', params.provider);
     if (params.sourceMode && params.sourceMode !== 'all') query.set('sourceMode', params.sourceMode);
+    if (params.startDate) query.set('startDate', params.startDate);
+    if (params.endDate) query.set('endDate', params.endDate);
     return `${BASE_URL}/logs/export?${query.toString()}`;
   },
 
@@ -131,6 +137,8 @@ export const backyardApi = {
     level?: string;
     engine?: string;
     search?: string;
+    startDate?: string;
+    endDate?: string;
   }) {
     const query = new URLSearchParams();
     if (params.page) query.set('page', params.page.toString());
@@ -138,6 +146,8 @@ export const backyardApi = {
     if (params.level && params.level !== 'all') query.set('level', params.level);
     if (params.engine && params.engine !== 'all') query.set('engine', params.engine);
     if (params.search) query.set('search', params.search);
+    if (params.startDate) query.set('startDate', params.startDate);
+    if (params.endDate) query.set('endDate', params.endDate);
 
     return request<PagedResult<DiagLogItem>>(`/diagnostics?${query.toString()}`);
   },
@@ -147,13 +157,25 @@ export const backyardApi = {
   },
 
   // Keys
-  async getKeys(params: { page?: number; pageSize?: number; search?: string; status?: string; provider?: string }) {
+  async getKeys(params: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    status?: string;
+    provider?: string;
+    tokenId?: string;
+    startDate?: string;
+    endDate?: string;
+  }) {
     const query = new URLSearchParams();
     if (params.page) query.set('page', params.page.toString());
     if (params.pageSize) query.set('pageSize', params.pageSize.toString());
     if (params.search) query.set('search', params.search);
     if (params.status && params.status !== 'all') query.set('status', params.status);
     if (params.provider && params.provider !== 'all') query.set('provider', params.provider);
+    if (params.tokenId && params.tokenId !== 'all') query.set('tokenId', params.tokenId);
+    if (params.startDate) query.set('startDate', params.startDate);
+    if (params.endDate) query.set('endDate', params.endDate);
 
     return request<PagedResult<ApiKeyItem>>(`/keys?${query.toString()}`);
   },
@@ -165,6 +187,7 @@ export const backyardApi = {
     provider?: string;
     name?: string;
     expiresInHours?: number | null;
+    tokenId?: string;
     customHost?: string;
     customPort?: number;
     customProtocol?: 'imap' | 'pop3';
@@ -180,6 +203,7 @@ export const backyardApi = {
     defaultProvider?: string;
     expiresInHours?: number | null;
     batchName?: string;
+    tokenId?: string;
   }) {
     return request<{
       totalProcessed: number;
@@ -221,9 +245,21 @@ export const backyardApi = {
     return request<any>(`/keys/${apiKey}/test`, { method: 'POST' });
   },
 
-  // Security: Blocked IPs
-  async getBlockedIps() {
-    return request<{ items: BlockedIpItem[]; total: number }>('/security/blocked-ips');
+  // Security: IP Analytics & Ban Center
+  async getIpAnalytics(params?: { range?: string; startDate?: string; endDate?: string }) {
+    const searchParams = new URLSearchParams();
+    if (params?.range) searchParams.set('range', params.range);
+    if (params?.startDate) searchParams.set('startDate', params.startDate);
+    if (params?.endDate) searchParams.set('endDate', params.endDate);
+    return request<any>(`/security/ip-analytics?${searchParams.toString()}`);
+  },
+
+  async getBlockedIps(params?: { search?: string; page?: number; pageSize?: number }) {
+    const searchParams = new URLSearchParams();
+    if (params?.search) searchParams.set('search', params.search);
+    if (params?.page) searchParams.set('page', params.page.toString());
+    if (params?.pageSize) searchParams.set('pageSize', params.pageSize.toString());
+    return request<{ items: BlockedIpItem[]; total: number; page: number; pageSize: number; totalPages: number }>(`/security/blocked-ips?${searchParams.toString()}`);
   },
 
   async blockIp(payload: { ip: string; reason?: string; durationHours?: number | null }) {
@@ -234,8 +270,8 @@ export const backyardApi = {
   },
 
   async unblockIp(id: string) {
-    return request<{ ok: boolean; message: string }>(`/security/blocked-ips/${id}`, {
-      method: 'DELETE'
+    return request<{ ok: boolean; message: string }>(`/security/blocked-ips/${id}/unban`, {
+      method: 'POST'
     });
   },
 
@@ -264,11 +300,13 @@ export const backyardApi = {
   },
 
   // Access Token Generator & Management
-  async getTokens(params?: { page?: number; pageSize?: number; search?: string }) {
+  async getTokens(params?: { page?: number; pageSize?: number; search?: string; startDate?: string; endDate?: string }) {
     const searchParams = new URLSearchParams();
     if (params?.page) searchParams.set('page', params.page.toString());
     if (params?.pageSize) searchParams.set('pageSize', params.pageSize.toString());
     if (params?.search) searchParams.set('search', params.search);
+    if (params?.startDate) searchParams.set('startDate', params.startDate);
+    if (params?.endDate) searchParams.set('endDate', params.endDate);
     return request<{
       items: AccessTokenItem[];
       total: number;
@@ -306,10 +344,12 @@ export const backyardApi = {
     });
   },
 
-  async getTokenLogs(id: string, params?: { page?: number; pageSize?: number }) {
+  async getTokenLogs(id: string, params?: { page?: number; pageSize?: number; startDate?: string; endDate?: string }) {
     const searchParams = new URLSearchParams();
     if (params?.page) searchParams.set('page', params.page.toString());
     if (params?.pageSize) searchParams.set('pageSize', params.pageSize.toString());
+    if (params?.startDate) searchParams.set('startDate', params.startDate);
+    if (params?.endDate) searchParams.set('endDate', params.endDate);
     return request<TokenLogsResponse>(`/tokens/${id}/logs?${searchParams.toString()}`);
   }
 };
