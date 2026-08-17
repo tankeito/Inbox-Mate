@@ -9,6 +9,9 @@ import { InboxMateError, isInboxMateError, safeError } from './errors.js';
 import { JobManager } from './jobs.js';
 import { MicrosoftOAuthService } from './microsoft-oauth.js';
 import { oauthStartSchema, parseCreateJobInput } from './validation.js';
+import { createBackyardRouter } from './routes/backyard-routes.js';
+import { apiKeyService } from './services/api-key-service.js';
+import { getClientIp, resolveIpRegion } from './services/usage-logger.js';
 
 const HOST = '127.0.0.1';
 const PORT = Number.parseInt(process.env.PORT ?? '3000', 10);
@@ -73,9 +76,42 @@ function writeSse(res: Response, event: { id: number; type: string; data: unknow
   res.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`);
 }
 
-function firstParam(value: string | string[]): string {
+function firstParam(value: string | string[] | undefined): string {
+  if (!value) return '';
   return Array.isArray(value) ? value[0] ?? '' : value;
 }
+
+import { ipBlockService } from './services/ip-block-service.js';
+
+function checkIpBlocked(req: Request, res: Response, next: NextFunction): void {
+  const clientIp = getClientIp(req);
+  const blockStatus = ipBlockService.isIpBlocked(clientIp);
+  if (blockStatus.blocked) {
+    res.status(403).json({
+      ok: false,
+      code: 'IP_BLOCKED',
+      error: `您的 IP (${clientIp}) 已被管理员限制访问，如需解封请联系客服或管理员。`,
+      reason: blockStatus.reason,
+      ip: clientIp
+    });
+    return;
+  }
+  next();
+}
+
+const RESERVED_ROOT_PATHS = new Set([
+  'backyard',
+  'api',
+  'assets',
+  'favicon.ico',
+  'vite.svg',
+  'index.html',
+  'doc',
+  'health',
+  'session',
+  'robots.txt',
+  'sitemap.xml'
+]);
 
 export function createServer(port = PORT) {
   const app = express();
@@ -107,7 +143,73 @@ export function createServer(port = PORT) {
       referrerPolicy: { policy: 'no-referrer' }
     })
   );
-  app.use(express.json({ limit: '64kb' }));
+  app.use(express.json({ limit: '512kb' }));
+
+  // Backyard Admin API Routes
+  app.use('/api/backyard', createBackyardRouter());
+
+  // Public API endpoint handler
+  async function handlePublicApiKeyFetch(req: Request, res: Response): Promise<void> {
+    const apiKey = firstParam(req.params.apiKey);
+    if (!apiKey || RESERVED_ROOT_PATHS.has(apiKey.toLowerCase()) || !/^[a-zA-Z0-9_-]{16,64}$/.test(apiKey)) {
+      res.status(404).json({ code: 404, success: false, error: '未找到 API 路由' });
+      return;
+    }
+
+    const clientIp = getClientIp(req);
+    const region = resolveIpRegion(clientIp);
+    const lookback = Number.parseInt(req.query.lookback as string) || 60;
+    const max = Number.parseInt(req.query.max as string) || 5;
+    const format = (req.query.format as string) || 'json';
+
+    // IP Block Check
+    const blockStatus = ipBlockService.isIpBlocked(clientIp);
+    if (blockStatus.blocked) {
+      if (format === 'code' || format === 'text') {
+        res.status(403).setHeader('Content-Type', 'text/plain; charset=utf-8').send(`BLOCKED: IP ${clientIp} is restricted`);
+        return;
+      }
+      res.status(403).json({
+        code: 403,
+        success: false,
+        error: `您的 IP (${clientIp}) 已被管理员限制访问，如需解封请联系管理员。`,
+        reason: blockStatus.reason
+      });
+      return;
+    }
+
+    try {
+      const result = await apiKeyService.executeApiKeyFetch(apiKey, {
+        lookbackMinutes: lookback,
+        maxMessages: max,
+        clientIp,
+        region
+      });
+
+      if (format === 'code' || format === 'text') {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.send(result.verificationCode || 'NONE');
+        return;
+      }
+
+      res.json(result);
+    } catch (err: any) {
+      if (format === 'code' || format === 'text') {
+        res.status(400).setHeader('Content-Type', 'text/plain; charset=utf-8').send(`ERROR: ${err.message || 'Fetch failed'}`);
+        return;
+      }
+      res.status(400).json({
+        code: 400,
+        success: false,
+        error: err.message || '邮件拉取失败',
+        queriedAt: new Date().toISOString()
+      });
+    }
+  }
+
+  app.get('/api/public/:apiKey', (req, res) => void handlePublicApiKeyFetch(req, res));
+
+  // Workspace API V1
   app.use('/api/v1', requireLoopback);
   app.use('/api/v1', (_req, res, next) => {
     res.set('Cache-Control', 'no-store, max-age=0');
@@ -144,10 +246,12 @@ export function createServer(port = PORT) {
 
   app.get('/api/v1/oauth/microsoft/callback', (req, res) => void oauth.handleCallback(req, res));
 
-  app.post('/api/v1/jobs', requireSession({ csrf: true }), (req, res, next) => {
+  app.post('/api/v1/jobs', requireSession({ csrf: true }), checkIpBlocked, (req, res, next) => {
     try {
       const input = parseCreateJobInput(req.body);
-      const job = jobs.create(input);
+      const clientIp = getClientIp(req);
+      const region = resolveIpRegion(clientIp);
+      const job = jobs.create(input, { clientIp, region });
       res.status(202).json({ jobId: job.jobId, state: job.state });
     } catch (error) {
       next(error);
@@ -197,6 +301,20 @@ export function createServer(port = PORT) {
   });
 
   app.use('/api/v1', (_req, res) => res.status(404).json({ error: safeError('BAD_REQUEST') }));
+
+  // Root Public API Endpoint: GET /:apiKey (with strict regex & reserved keyword check)
+  app.get('/:apiKey', (req, res, next) => {
+    const apiKey = firstParam(req.params.apiKey);
+    if (
+      !apiKey ||
+      RESERVED_ROOT_PATHS.has(apiKey.toLowerCase()) ||
+      !/^[a-zA-Z0-9_-]{16,64}$/.test(apiKey)
+    ) {
+      next();
+      return;
+    }
+    void handlePublicApiKeyFetch(req, res);
+  });
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     const appError = isInboxMateError(error) ? error : new InboxMateError('INTERNAL', 500);

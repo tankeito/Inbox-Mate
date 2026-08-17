@@ -1,0 +1,161 @@
+import { DatabaseSync } from 'node:sqlite';
+import { existsSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+
+const DATA_DIR = path.resolve(process.cwd(), 'data');
+if (!existsSync(DATA_DIR)) {
+  mkdirSync(DATA_DIR, { recursive: true });
+}
+
+const DB_PATH = path.join(DATA_DIR, 'inbox_mate.db');
+
+export function hashPassword(password: string, salt?: string): { hash: string; salt: string } {
+  const actualSalt = salt || randomBytes(16).toString('hex');
+  const derivedKey = scryptSync(password, actualSalt, 64);
+  return { hash: derivedKey.toString('hex'), salt: actualSalt };
+}
+
+export function verifyPassword(password: string, hash: string, salt: string): boolean {
+  try {
+    const derivedKey = scryptSync(password, salt, 64);
+    const keyBuffer = Buffer.from(hash, 'hex');
+    return timingSafeEqual(derivedKey, keyBuffer);
+  } catch {
+    return false;
+  }
+}
+
+class DatabaseService {
+  private db: DatabaseSync;
+
+  constructor() {
+    this.db = new DatabaseSync(DB_PATH);
+    this.initPragmas();
+    this.initTables();
+    this.initDefaultAdmin();
+  }
+
+  private initPragmas() {
+    this.db.exec('PRAGMA journal_mode = WAL;');
+    this.db.exec('PRAGMA synchronous = NORMAL;');
+    this.db.exec('PRAGMA foreign_keys = ON;');
+  }
+
+  private initTables() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS admin_users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        password_salt TEXT NOT NULL,
+        two_factor_secret TEXT,
+        two_factor_enabled INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS usage_logs (
+        id TEXT PRIMARY KEY,
+        client_ip TEXT NOT NULL,
+        region TEXT NOT NULL,
+        email_account TEXT NOT NULL,
+        email_domain TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        source_mode TEXT NOT NULL,
+        status TEXT NOT NULL,
+        status_detail TEXT,
+        has_code INTEGER NOT NULL DEFAULT 0,
+        extracted_code TEXT,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        message_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_usage_logs_email ON usage_logs(email_account);
+      CREATE INDEX IF NOT EXISTS idx_usage_logs_ip ON usage_logs(client_ip);
+      CREATE INDEX IF NOT EXISTS idx_usage_logs_status ON usage_logs(status);
+      CREATE INDEX IF NOT EXISTS idx_usage_logs_provider ON usage_logs(provider);
+
+      CREATE TABLE IF NOT EXISTS diagnostic_logs (
+        id TEXT PRIMARY KEY,
+        timestamp TEXT NOT NULL,
+        level TEXT NOT NULL,
+        engine TEXT NOT NULL,
+        account_email TEXT,
+        stage TEXT NOT NULL,
+        message TEXT NOT NULL,
+        details TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_diag_logs_timestamp ON diagnostic_logs(timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_diag_logs_engine ON diagnostic_logs(engine);
+      CREATE INDEX IF NOT EXISTS idx_diag_logs_level ON diagnostic_logs(level);
+
+      CREATE TABLE IF NOT EXISTS api_keys (
+        id TEXT PRIMARY KEY,
+        api_key TEXT UNIQUE NOT NULL,
+        name TEXT,
+        account_email TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        encrypted_auth TEXT NOT NULL,
+        auth_iv TEXT NOT NULL,
+        auth_tag TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        expires_at TEXT,
+        call_count INTEGER NOT NULL DEFAULT 0,
+        last_used_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(api_key);
+      CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(account_email);
+      CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(is_active, expires_at);
+
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS blocked_ips (
+        id TEXT PRIMARY KEY,
+        ip TEXT UNIQUE NOT NULL,
+        reason TEXT,
+        blocked_by TEXT,
+        created_at TEXT NOT NULL,
+        expires_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_blocked_ips_ip ON blocked_ips(ip);
+    `);
+  }
+
+  private initDefaultAdmin() {
+    const defaultEmail = 'tqd354@gmail.com';
+    const defaultPass = 'aaAA1122';
+
+    const checkStmt = this.db.prepare('SELECT id FROM admin_users WHERE email = ?');
+    const existing = checkStmt.get(defaultEmail);
+
+    if (!existing) {
+      const { hash, salt } = hashPassword(defaultPass);
+      const now = new Date().toISOString();
+      const insertStmt = this.db.prepare(`
+        INSERT INTO admin_users (id, email, password_hash, password_salt, two_factor_enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 0, ?, ?)
+      `);
+      insertStmt.run(randomBytes(16).toString('hex'), defaultEmail, hash, salt, now, now);
+      console.info('[Database] Default admin initialized securely.');
+    }
+  }
+
+  public getRawDb(): DatabaseSync {
+    return this.db;
+  }
+}
+
+export const dbService = new DatabaseService();
+export const db = dbService.getRawDb();

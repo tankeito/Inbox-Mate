@@ -1120,8 +1120,13 @@ export function App() {
       const responseBody = (await response.json().catch(() => null)) as Record<string, unknown> | null;
       const nextJobId = stringValue(responseBody?.jobId);
       if (!response.ok || !nextJobId) {
+        if (responseBody?.code === 'IP_BLOCKED' || (typeof responseBody?.error === 'string' && responseBody.error.includes('限制访问'))) {
+          const blockMsg = typeof responseBody.error === 'string' ? responseBody.error : '您的 IP 已被系统管理员限制访问，如有疑问请联系客服或管理员。';
+          notify('error', `🚫 访问受限: ${blockMsg}`);
+          throw new Error(blockMsg);
+        }
         const errObj = responseBody?.error as Record<string, unknown> | undefined;
-        const serverError = stringValue(errObj?.message) || stringValue(errObj?.code);
+        const serverError = stringValue(errObj?.message) || stringValue(errObj?.code) || (typeof responseBody?.error === 'string' ? responseBody.error : '');
         throw new Error(serverError ? `服务报错: ${serverError}` : '无法启动邮件抓取任务');
       }
 

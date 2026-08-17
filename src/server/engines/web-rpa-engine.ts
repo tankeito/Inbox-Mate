@@ -6,6 +6,7 @@ import type { AccountInput, CodeMatch, EmailItem } from '../../shared/types.js';
 import { extractVerificationCode } from '../../shared/verification-code.js';
 import { InboxMateError } from '../errors.js';
 import type { FetchAccountOptions, FetchAccountResult } from '../imap-client.js';
+import { diagLogger } from '../services/diag-logger.js';
 
 const MAIL_COM_HOME = 'https://www.mail.com';
 const NAVIGATION_TIMEOUT_MS = 30_000;
@@ -253,6 +254,92 @@ export async function closeSharedBrowser(): Promise<void> {
   browserPromise = null;
   browserUsageCount = 0;
   if (browser) await browser.close().catch(() => {});
+}
+
+const serverStartTime = Date.now();
+
+export async function getRpaStatus() {
+  const proxy = await detectRpaProxy();
+  const isConnected = Boolean(sharedBrowser?.isConnected());
+  const mem = process.memoryUsage();
+
+  return {
+    status: isConnected ? (activeRunningAccounts > 0 ? 'busy' : 'idle') : 'ready',
+    isConnected,
+    activeConcurrentAccounts: activeRunningAccounts,
+    browserUsageCount,
+    maxRecycleUsage: MAX_BROWSER_RECYCLE_USAGE,
+    proxyInfo: {
+      server: proxy.server || null,
+      source: proxy.source
+    },
+    uptimeSeconds: Math.floor((Date.now() - serverStartTime) / 1000),
+    systemPlatform: process.platform,
+    nodeVersion: process.version,
+    memoryUsageMb: Math.round(mem.rss / (1024 * 1024)),
+    heapUsedMb: Math.round(mem.heapUsed / (1024 * 1024))
+  };
+}
+
+export async function restartSharedBrowser(): Promise<{ message: string; activeAccountsBefore: number }> {
+  const before = activeRunningAccounts;
+  diagLogger.warn('web_rpa', '手动重启', `管理员执行了手动重启 Chrome 无头浏览器 (重启前并发: ${before})`);
+  await closeSharedBrowser();
+  activeRunningAccounts = 0;
+  browserUsageCount = 0;
+  // Pre-warm fresh browser instance
+  await acquireBrowser();
+  await releaseBrowser();
+  diagLogger.info('web_rpa', '重启完成', 'Chrome 无头浏览器已成功重新初始化并就绪');
+  return {
+    message: 'Chrome 无头浏览器已成功安全重启并就绪！',
+    activeAccountsBefore: before
+  };
+}
+
+export async function testRpaHealthCheck(): Promise<{
+  ok: boolean;
+  latencyMs: number;
+  proxyUsed: string;
+  pageTitle: string;
+  statusCode: number;
+  hasCaptcha: boolean;
+}> {
+  const startTime = Date.now();
+  const proxy = await detectRpaProxy();
+  diagLogger.info('web_rpa', '健康自检', `正在发起无头浏览器连通性自检 (代理: ${proxy.server ?? '直连'})`);
+
+  const browser = await acquireBrowser();
+  const context = await browser.newContext({
+    proxy: proxy.server ? { server: proxy.server } : undefined,
+    viewport: { width: 1280, height: 800 }
+  });
+
+  try {
+    const page = await context.newPage();
+    const response = await page.goto(MAIL_COM_HOME, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+    const content = await page.content().catch(() => '');
+    const title = await page.title().catch(() => '');
+    const latency = Date.now() - startTime;
+    const hasCaptcha = isCaptchaPage(content);
+
+    diagLogger.info('web_rpa', '自检完成', `Mail.com 连通性自检成功 (耗时: ${latency}ms, 标题: "${title}", 验证码: ${hasCaptcha ? '有' : '无'})`);
+
+    return {
+      ok: true,
+      latencyMs: latency,
+      proxyUsed: proxy.server || '直连 Direct',
+      pageTitle: title || 'Mail.com',
+      statusCode: response?.status() || 200,
+      hasCaptcha
+    };
+  } catch (err: any) {
+    diagLogger.error('web_rpa', '自检失败', `Mail.com 连通性探测失败: ${err.message}`);
+    throw new InboxMateError('CONNECTION_FAILED', 400, `自检失败: ${err.message}`);
+  } finally {
+    await context.close().catch(() => {});
+    await releaseBrowser();
+  }
 }
 
 
@@ -677,6 +764,16 @@ export async function fetchAccountVerificationCodeViaWebRpa(
 
   try {
     options.onProgress('authenticating');
+    stage = '启动浏览器';
+    const startTime = Date.now();
+    const currentConcurrent = activeRunningAccounts;
+    diagLogger.info(
+      'web_rpa',
+      stage,
+      `启动无头浏览器 [并发任务数: ${currentConcurrent}, 代理: ${proxy.server ?? '直连'}]`,
+      { proxy: proxy.source, concurrentTasks: currentConcurrent },
+      email
+    );
     const browser = await acquireBrowser();
     context = await browser.newContext({
       proxy: proxy.server ? { server: proxy.server } : undefined,
@@ -788,9 +885,13 @@ export async function fetchAccountVerificationCodeViaWebRpa(
 
     options.onProgress('connecting');
     stage = '打开 Mail.com';
+    diagLogger.debug('web_rpa', stage, `正在导航到 Mail.com 首页 (耗时: ${Date.now() - startTime}ms)`, undefined, email);
     await page.goto(MAIL_COM_HOME, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT_MS });
     const initialContent = await page.content().catch(() => '');
-    if (isCaptchaPage(initialContent)) throw new InboxMateError('CAPTCHA_TRIGGERED');
+    if (isCaptchaPage(initialContent)) {
+      diagLogger.warn('web_rpa', stage, '首页触发 Cloudflare/验证码阻拦', { concurrentTasks: activeRunningAccounts }, email);
+      throw new InboxMateError('CAPTCHA_TRIGGERED');
+    }
 
     stage = '打开登录框';
     const { emailInput, passwordInput } = await ensureMailComLoginFormVisible(page);
@@ -801,6 +902,7 @@ export async function fetchAccountVerificationCodeViaWebRpa(
 
     options.onProgress('searching');
     stage = '提交登录';
+    diagLogger.debug('web_rpa', stage, `提交登录表单 (当前并发: ${activeRunningAccounts})`, undefined, email);
     const loginForm = page.locator('form').filter({ has: emailInput });
     const submitButton = loginForm.locator('button[type="submit"]').filter({ visible: true }).first();
     if ((await submitButton.count()) > 0) await submitButton.click({ timeout: 10_000 });
@@ -823,18 +925,28 @@ export async function fetchAccountVerificationCodeViaWebRpa(
 
       const currentUrl = page.url();
       const content = await page.content().catch(() => '');
-      if (isCaptchaPage(content)) throw new InboxMateError('CAPTCHA_TRIGGERED');
-      if (isAuthenticationFailure(currentUrl, content)) throw new InboxMateError('AUTH_FAILED');
+      if (isCaptchaPage(content)) {
+        diagLogger.warn('web_rpa', stage, '登录中触发验证码', { url: currentUrl, concurrentTasks: activeRunningAccounts }, email);
+        throw new InboxMateError('CAPTCHA_TRIGGERED');
+      }
+      if (isAuthenticationFailure(currentUrl, content)) {
+        diagLogger.warn('web_rpa', stage, '账号或密码错误', { url: currentUrl }, email);
+        throw new InboxMateError('AUTH_FAILED');
+      }
     }
 
     if (!mailListSeen) {
       const content = await page.content().catch(() => '');
       if (isCaptchaPage(content)) throw new InboxMateError('CAPTCHA_TRIGGERED');
       if (isAuthenticationFailure(page.url(), content)) throw new InboxMateError('AUTH_FAILED');
+      diagLogger.warn('web_rpa', stage, `30秒内未加载出收件箱列表 (并发: ${activeRunningAccounts}, 耗时: ${Date.now() - startTime}ms)`, {
+        url: page.url(),
+        concurrentTasks: activeRunningAccounts
+      }, email);
       throw new InboxMateError(
         'TIMEOUT',
         400,
-        'Mail.com 登录成功后未在 30 秒内加载收件箱。'
+        `Mail.com 登录成功后未在 30 秒内加载收件箱（当前并发: ${activeRunningAccounts}）。`
       );
     }
 
@@ -846,6 +958,9 @@ export async function fetchAccountVerificationCodeViaWebRpa(
     stage = '解析邮件列表';
     if (capturedMails.length === 0) mergeCapturedMails(capturedMails, await parseMailboxDom(page));
     const selectedMails = selectMailComMessages(capturedMails, options);
+    diagLogger.info('web_rpa', stage, `捕获到 ${capturedMails.length} 封邮件，筛选出 ${selectedMails.length} 封`, {
+      concurrentTasks: activeRunningAccounts
+    }, email);
 
     stage = '抓取邮件正文';
     await hydrateMailBodies(
@@ -856,12 +971,32 @@ export async function fetchAccountVerificationCodeViaWebRpa(
       () => noCacheKey
     );
     if (options.signal.aborted) throw new InboxMateError('CANCELLED');
-    return mapResult(account, selectedMails);
+
+    const mapped = mapResult(account, selectedMails);
+    diagLogger.info('web_rpa', '抓取成功', `完成邮件抓取，识别验证码: ${mapped.primaryCode?.code || '无'} (总耗时: ${Date.now() - startTime}ms)`, {
+      code: mapped.primaryCode?.code,
+      messageCount: mapped.messages.length,
+      durationMs: Date.now() - startTime,
+      concurrentTasks: activeRunningAccounts
+    }, email);
+
+    return mapped;
   } catch (error) {
     if (options.signal.aborted) throw new InboxMateError('CANCELLED');
-    if (error instanceof InboxMateError) throw error;
+    if (error instanceof InboxMateError) {
+      diagLogger.warn('web_rpa', stage, `业务异常: ${error.message} (并发任务数: ${activeRunningAccounts})`, {
+        code: error.code,
+        concurrentTasks: activeRunningAccounts
+      }, email);
+      throw error;
+    }
     const classified = classifyBrowserError(error, stage, proxy);
     console.error(`[web-rpa] stage=${stage} error=${error instanceof Error ? error.message : String(error)}`);
+    diagLogger.error('web_rpa', stage, `浏览器抓取异常: ${error instanceof Error ? error.message : String(error)} (并发: ${activeRunningAccounts})`, {
+      stage,
+      concurrentTasks: activeRunningAccounts,
+      proxy: proxy.server
+    }, email);
     throw classified;
   } finally {
     options.signal.removeEventListener('abort', closeOnAbort);

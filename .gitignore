@@ -48,4 +48,8 @@ scratch_*.js
 doc/
 *.pdf
 tmp/
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
 

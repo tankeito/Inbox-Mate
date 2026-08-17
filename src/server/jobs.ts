@@ -14,6 +14,8 @@ import { InboxMateError, isInboxMateError, safeError } from './errors.js';
 import { maskEmail } from './providers.js';
 
 import { routeAccountEngine } from './engine-router.js';
+import { usageLogger } from './services/usage-logger.js';
+import { diagLogger } from './services/diag-logger.js';
 
 const ACCOUNT_TIMEOUT_MS = 30_000;
 const RPA_ACCOUNT_TIMEOUT_MS = 90_000;
@@ -35,6 +37,8 @@ interface JobRuntime {
   events: JobEvent[];
   listeners: Set<(event: JobEvent) => void>;
   eventId: number;
+  clientIp?: string;
+  region?: string;
 }
 
 import type { FetchAccountResult } from './imap-client.js';
@@ -87,7 +91,7 @@ export class JobManager {
 
   constructor(private readonly runAccount: JobAccountRunner) {}
 
-  create(input: CreateJobInput): JobSnapshot {
+  create(input: CreateJobInput, meta?: { clientIp?: string; region?: string }): JobSnapshot {
     for (const [id, job] of this.jobs.entries()) {
       if (!isTerminal(job.state)) {
         this.cancel(id);
@@ -99,6 +103,8 @@ export class JobManager {
       state: 'queued',
       createdAt: now,
       updatedAt: now,
+      clientIp: meta?.clientIp || '127.0.0.1',
+      region: meta?.region,
       accounts: input.accounts.map((account) => ({
         input: account,
         snapshot: {
@@ -193,6 +199,11 @@ export class JobManager {
       return;
     }
 
+    const email = account.input.email;
+    const provider = account.snapshot.provider;
+    const mode = job.accounts.length > 1 ? 'batch' : 'single';
+    const startTime = Date.now();
+
     const timeoutController = new AbortController();
     let timedOut = false;
     const timeout = setTimeout(() => {
@@ -211,6 +222,16 @@ export class JobManager {
       });
       if (combined.aborted) {
         this.setAccountState(job, account, 'cancelled');
+        usageLogger.record({
+          clientIp: job.clientIp || '127.0.0.1',
+          region: job.region,
+          emailAccount: email,
+          provider,
+          sourceMode: mode,
+          status: 'cancelled',
+          hasCode: false,
+          durationMs: Date.now() - startTime
+        });
       } else {
         const primaryCode = result && typeof result === 'object' && 'primaryCode' in result ? (result as FetchAccountResult).primaryCode : (result as unknown as CodeMatch);
         const messages = result && typeof result === 'object' && 'messages' in result ? (result as FetchAccountResult).messages : undefined;
@@ -218,17 +239,55 @@ export class JobManager {
         account.snapshot.messages = messages;
         account.snapshot.error = (messages && messages.length > 0) || primaryCode ? undefined : safeError('NO_MATCH');
         this.setAccountState(job, account, 'completed');
+
+        usageLogger.record({
+          clientIp: job.clientIp || '127.0.0.1',
+          region: job.region,
+          emailAccount: email,
+          provider,
+          sourceMode: mode,
+          status: primaryCode ? 'success' : 'no_code',
+          hasCode: Boolean(primaryCode),
+          extractedCode: primaryCode?.code,
+          durationMs: Date.now() - startTime,
+          messageCount: messages?.length || 0
+        });
       }
     } catch (error) {
+      const durationMs = Date.now() - startTime;
+      let status: 'timeout' | 'captcha' | 'auth_failed' | 'error' = 'error';
+      let errorMsg = '抓取异常';
+
       if (timedOut) {
+        status = 'timeout';
+        errorMsg = '请求超时';
         this.setAccountState(job, account, 'failed', safeError('TIMEOUT'));
       } else if (job.controller.signal.aborted || combined.aborted) {
         this.setAccountState(job, account, 'cancelled');
+        status = 'error';
+        errorMsg = '用户取消';
       } else if (isInboxMateError(error)) {
+        if (error.code === 'CAPTCHA_TRIGGERED') status = 'captcha';
+        else if (error.code === 'AUTH_FAILED' || error.code === 'AUTH_DENIED') status = 'auth_failed';
+        else if (error.code === 'TIMEOUT') status = 'timeout';
+        errorMsg = error.customMessage || error.code;
         this.setAccountState(job, account, 'failed', safeError(error.code, error.customMessage));
       } else {
         this.setAccountState(job, account, 'failed', safeError('INTERNAL'));
       }
+
+      usageLogger.record({
+        clientIp: job.clientIp || '127.0.0.1',
+        region: job.region,
+        emailAccount: email,
+        provider,
+        sourceMode: mode,
+        status,
+        statusDetail: errorMsg,
+        hasCode: false,
+        durationMs,
+        messageCount: 0
+      });
     } finally {
       clearTimeout(timeout);
     }
