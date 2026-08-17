@@ -51,6 +51,7 @@ export interface JobAccountRunnerOptions {
   lookbackMinutes: number;
   maxMessages: number;
   onProgress: (state: AccountSnapshot['state']) => void;
+  traceId?: string;
 }
 
 export type JobAccountRunner = (input: AccountInput, options: JobAccountRunnerOptions) => Promise<FetchAccountResult>;
@@ -227,6 +228,7 @@ export class JobManager {
     const provider = account.snapshot.provider;
     const mode = job.accounts.length > 1 ? 'batch' : 'single';
     const startTime = Date.now();
+    const traceId = randomUUID();
 
     const timeoutController = new AbortController();
     let timedOut = false;
@@ -242,11 +244,13 @@ export class JobManager {
         signal: combined,
         lookbackMinutes: input.lookbackMinutes,
         maxMessages: input.maxMessagesPerAccount,
+        traceId,
         onProgress: (state) => this.setAccountState(job, account, state)
       });
       if (combined.aborted) {
         this.setAccountState(job, account, 'cancelled');
         usageLogger.record({
+          id: traceId,
           clientIp: job.clientIp || '127.0.0.1',
           region: job.region,
           emailAccount: email,
@@ -280,6 +284,7 @@ export class JobManager {
         }
 
         usageLogger.record({
+          id: traceId,
           clientIp: job.clientIp || '127.0.0.1',
           region: job.region,
           emailAccount: email,
@@ -318,6 +323,7 @@ export class JobManager {
       }
 
       usageLogger.record({
+        id: traceId,
         clientIp: job.clientIp || '127.0.0.1',
         region: job.region,
         emailAccount: email,

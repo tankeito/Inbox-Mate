@@ -312,8 +312,8 @@ export class AccessTokenService {
     const pageSize = Math.max(1, Math.min(100, params?.pageSize || 20));
     const offset = (page - 1) * pageSize;
 
-    const conditions: string[] = ['(token_id = ? OR token = ?)'];
-    const args: any[] = [token.id, token.token];
+    const conditions: string[] = ['(token_id = ? OR token = ? OR token_id = ? OR token = ?)'];
+    const args: any[] = [token.id, token.token, token.token, token.id];
 
     if (params?.startDate && params.startDate.trim()) {
       const s = params.startDate.trim();
@@ -333,8 +333,7 @@ export class AccessTokenService {
 
     const countStmt = db.prepare(`SELECT COUNT(*) as count FROM usage_logs ${whereClause}`);
     const countRes = countStmt.get(...args) as any;
-    const total = countRes ? countRes.count : 0;
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    let total = countRes ? countRes.count : 0;
 
     const listStmt = db.prepare(`
       SELECT * FROM usage_logs
@@ -343,6 +342,12 @@ export class AccessTokenService {
       LIMIT ? OFFSET ?
     `);
     const rows = listStmt.all(...args, pageSize, offset) as any[];
+
+    // Auto-calibrate total and totalPages to actual data
+    if (page === 1 && rows.length < pageSize && total !== rows.length) {
+      total = rows.length;
+    }
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
     const items: UsageLogItem[] = rows.map((r) => ({
       id: r.id,

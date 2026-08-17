@@ -288,6 +288,26 @@ export const DiagnosticsView: React.FC = () => {
                   {/* Expanded JSON Context */}
                   {isSelected && parsedDetails && (
                     <div style={{ marginTop: '10px', animation: 'fadeIn 0.15s ease' }}>
+                      {parsedDetails.screenshotBase64 && (
+                        <div style={{ marginBottom: '12px' }}>
+                          <div style={{ fontSize: '0.78rem', color: 'var(--by-text-muted)', marginBottom: '4px', fontWeight: 600 }}>
+                            异常现场快照截图:
+                          </div>
+                          <img
+                            src={parsedDetails.screenshotBase64}
+                            alt="异常现场快照"
+                            style={{
+                              maxWidth: '480px',
+                              width: '100%',
+                              maxHeight: '260px',
+                              objectFit: 'contain',
+                              background: '#000',
+                              borderRadius: '6px',
+                              border: '1px solid var(--by-border)'
+                            }}
+                          />
+                        </div>
+                      )}
                       <pre style={{
                         background: 'var(--by-bg-input)',
                         padding: '10px 14px',

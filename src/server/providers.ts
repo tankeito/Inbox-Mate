@@ -27,9 +27,8 @@ const GMX_DOMAINS = ['gmx.com', 'gmx.net', 'gmx.de', 'gmx.at', 'gmx.ch', 'gmx.fr
 const RAMBLER_DOMAINS = ['rambler.ru', 'myrambler.ru', 'ro.ru', 'lenta.ru', 'autorambler.ru'] as const;
 const MAILRU_DOMAINS = ['mail.ru', 'inbox.ru', 'list.ru', 'bk.ru', 'internet.ru'] as const;
 
-const MAILCOM_DOMAINS = [
+export const MAILCOM_DOMAINS = [
   'mail.com',
-  'cheerful.com',
   'email.com',
   'usa.com',
   'myself.com',
@@ -39,6 +38,7 @@ const MAILCOM_DOMAINS = [
   'engineer.com',
   'techie.com',
   'writeme.com',
+  'cheerful.com',
   'catlover.com',
   'doglover.com',
   'solution4u.com',
@@ -65,7 +65,129 @@ const MAILCOM_DOMAINS = [
   'optician.com',
   'pediatrician.com',
   'presidency.com',
-  'crew22.net'
+  'crew22.net',
+  'actuary.net',
+  'adexec.com',
+  'allergist.com',
+  'alumnidirector.com',
+  'ambulance.net',
+  'appraiser.net',
+  'archaeologist.com',
+  'architect.com',
+  'artlover.com',
+  'auctioneer.net',
+  'bartender.net',
+  'bellair.net',
+  'bikerider.com',
+  'birdlover.com',
+  'boatlover.com',
+  'brewer.com',
+  'brewmeister.com',
+  'cameraman.net',
+  'caregiver.com',
+  'cashier.com',
+  'chef.net',
+  'chemist.com',
+  'clerk.com',
+  'collector.org',
+  'comic.com',
+  'computer4u.com',
+  'contractor.net',
+  'counsellor.com',
+  'count.com',
+  'couple.com',
+  'cricketer.com',
+  'customsagent.com',
+  'cyberdude.com',
+  'cybergal.com',
+  'cyber-wizard.com',
+  'disposable.com',
+  'doctor.com',
+  'execs.com',
+  'financier.com',
+  'fireman.net',
+  'gardener.net',
+  'geologist.com',
+  'graphic-designer.com',
+  'hairdresser.net',
+  'homemail.com',
+  'humanoid.net',
+  'hypnotherapist.net',
+  'instructor.net',
+  'insurer.com',
+  'journalist.com',
+  'lawyer.com',
+  'legislator.com',
+  'lobbyist.com',
+  'mad.scientist.com',
+  'minister.com',
+  'musician.org',
+  'nightly.com',
+  'nonpartisan.com',
+  'northeast.com',
+  'nurse.net',
+  'officemail.com',
+  'orthodontist.net',
+  'physicist.net',
+  'politician.com',
+  'popstar.com',
+  'priest.com',
+  'programmer.net',
+  'publicist.com',
+  'radiologist.net',
+  'reggae.com',
+  'reiki.com',
+  'rescueteam.com',
+  'salesperson.net',
+  'scientist.com',
+  'secretary.net',
+  'socialworker.net',
+  'songwriter.net',
+  'specialist.com',
+  'surfer.com',
+  'surgical.net',
+  'sweetheart.com',
+  'toothfairy.com',
+  'tvstar.com',
+  'umpire.com',
+  'usatodaymail.com',
+  'writer.com',
+  'yours.com',
+  'californiamail.com',
+  'dallasmail.com',
+  'nycmail.com',
+  'boston.com',
+  'alaska.com',
+  'arizona.com',
+  'floridamail.com',
+  'texas.com',
+  'europe.com',
+  'asia.com',
+  'africa.com',
+  'australiamail.com',
+  'japan.com',
+  'berlin.com',
+  'london.com',
+  'madrid.com',
+  'rome.com',
+  'paris.com',
+  'singapore.com',
+  'tokyo.com',
+  'dublin.com',
+  'germanymail.com',
+  'loveable.com',
+  'madonna.com',
+  'ninja.com',
+  'orthodox.com',
+  'poetic.com',
+  'proud.com',
+  'rare.com',
+  'saintly.com',
+  'sinful.com',
+  'starmail.com',
+  'whoever.com',
+  'winning.com',
+  'witty.com'
 ] as const;
 
 const YAHOO_DOMAINS = ['yahoo.com', 'yahoo.co.uk', 'yahoo.de', 'yahoo.fr', 'myyahoo.com', 'ymail.com'] as const;
@@ -217,9 +339,25 @@ export function domainFromEmail(email: string): string | undefined {
   return normalized.slice(at + 1);
 }
 
+export function isMailComDomain(domain?: string): boolean {
+  if (!domain) return false;
+  const d = domain.trim().toLowerCase();
+  return (
+    (MAILCOM_DOMAINS as readonly string[]).includes(d) ||
+    d === 'mail.com' ||
+    d.endsWith('.mail.com')
+  );
+}
+
 export function autoDetectCustomProvider(email: string): ProviderProfile {
   const domain = domainFromEmail(email) || 'custom.com';
-  const isMailComDomain = (PROVIDER_REGISTRY.mailcom.domains as readonly string[]).includes(domain);
+  const isMailCom = isMailComDomain(domain);
+  if (isMailCom) {
+    return {
+      ...PROVIDER_REGISTRY.mailcom,
+      domains: [domain]
+    };
+  }
   return {
     id: 'custom',
     label: `自定义 (${domain})`,
@@ -227,13 +365,19 @@ export function autoDetectCustomProvider(email: string): ProviderProfile {
     port: 993,
     domains: [domain],
     auth: 'app_password',
-    engineType: isMailComDomain ? 'web_rpa' : 'imap_pop3'
+    engineType: 'imap_pop3'
   };
 }
 
 export function providerForEmail(email: string): ProviderProfile {
   const domain = domainFromEmail(email);
   if (!domain) return autoDetectCustomProvider('user@custom.com');
+  if (isMailComDomain(domain)) {
+    return {
+      ...PROVIDER_REGISTRY.mailcom,
+      domains: [domain]
+    };
+  }
   const matched = Object.values(PROVIDER_REGISTRY).find((provider) => provider.domains.includes(domain));
   if (matched) return matched;
   return autoDetectCustomProvider(email);

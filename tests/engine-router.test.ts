@@ -27,6 +27,29 @@ describe('routeAccountEngine', () => {
       auth: { type: 'app_password', secret: 'password123' }
     };
     expect(routeAccountEngine(usaComAccount)).toBe('web_rpa');
+
+    // Test other Mail.com group domains across categories
+    const testDomains = [
+      'catlover.com',
+      'engineer.com',
+      'myself.com',
+      'dr.com',
+      'cheerful.com',
+      'europe.com',
+      'asia.com',
+      'consultant.com',
+      'accountant.com',
+      'post.com'
+    ];
+    for (const d of testDomains) {
+      const acc: AccountInput = {
+        clientAccountId: `acc-${d}`,
+        email: `tester@${d}`,
+        provider: 'custom',
+        auth: { type: 'app_password', secret: 'pass' }
+      };
+      expect(routeAccountEngine(acc)).toBe('web_rpa');
+    }
   });
 
   it('routes Microsoft OAuth accounts to microsoft_graph', () => {

@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { db } from '../db/database.js';
 import { parseAccountLineSmart } from '../../shared/account-parser.js';
 import { providerForEmail } from '../providers.js';
@@ -274,6 +274,7 @@ export class ApiKeyService {
     status?: 'all' | 'active' | 'expired' | 'disabled';
     provider?: string;
     tokenId?: string;
+    token?: string;
     startDate?: string;
     endDate?: string;
   }): { items: ApiKeyItem[]; total: number; page: number; pageSize: number; totalPages: number } {
@@ -296,8 +297,13 @@ export class ApiKeyService {
     }
 
     if (params.tokenId && params.tokenId !== 'all') {
-      conditions.push('k.token_id = ?');
-      args.push(params.tokenId);
+      conditions.push('(k.token_id = ? OR k.bound_token = ? OR t.token = ?)');
+      args.push(params.tokenId, params.tokenId, params.tokenId);
+    }
+
+    if (params.token && params.token !== 'all') {
+      conditions.push('(k.bound_token = ? OR t.token = ? OR k.token_id = ?)');
+      args.push(params.token, params.token, params.token);
     }
 
     if ((params as any).startDate && (params as any).startDate.trim()) {
@@ -560,18 +566,20 @@ export class ApiKeyService {
       };
     }
 
+    const traceId = randomUUID();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60_000);
 
-    diagLogger.info('api', '接收请求', `收到 API Key 邮件拉取请求 (${email})`, { apiKey, clientIp: options.clientIp }, email);
+    diagLogger.info('api', '接收请求', `收到 API Key 邮件拉取请求 (${email})`, { apiKey, clientIp: options.clientIp, traceId }, email, traceId);
 
     try {
       const fetchResult = await fetchAccountVerificationCode(accountInput, {
         lookbackMinutes: typeof options.lookbackMinutes === 'number' ? options.lookbackMinutes : 0,
         maxMessages: typeof options.maxMessages === 'number' && options.maxMessages > 0 ? options.maxMessages : 10,
         signal: controller.signal,
+        traceId,
         onProgress: (state) => {
-          diagLogger.debug('api', `进度: ${state}`, `正在执行 ${state}`, undefined, email);
+          diagLogger.debug('api', `进度: ${state}`, `正在执行 ${state}`, undefined, email, traceId);
         },
         resolveMicrosoftAccessToken: () => {
           throw new Error('OAuth 会话不可用于直接 API Key 调用，请使用 Refresh Token 或应用密码');
@@ -610,6 +618,7 @@ export class ApiKeyService {
 
       // Record usage log
       usageLogger.record({
+        id: traceId,
         clientIp: options.clientIp,
         region: options.region,
         emailAccount: email,
@@ -667,6 +676,7 @@ export class ApiKeyService {
       const errMsg = err?.message || '邮件拉取失败';
 
       usageLogger.record({
+        id: traceId,
         clientIp: options.clientIp,
         region: options.region,
         emailAccount: email,

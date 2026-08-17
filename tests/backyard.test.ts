@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { adminAuthService } from '../src/server/auth/admin-auth.js';
 import { generateBase32Secret, generateTotp, verifyTotp, generateOtpAuthUri } from '../src/server/auth/totp.js';
 import { usageLogger } from '../src/server/services/usage-logger.js';
 import { diagLogger } from '../src/server/services/diag-logger.js';
 import { apiKeyService, encryptSecret, decryptSecret } from '../src/server/services/api-key-service.js';
+import { accessTokenService } from '../src/server/services/access-token-service.js';
 
 describe('Backyard Management & API Engine', () => {
   describe('TOTP 2FA Engine', () => {
@@ -149,6 +151,36 @@ describe('Backyard Management & API Engine', () => {
       expect(formatted).toContain('密码: oL9KZDccB');
       expect(formatted).toContain('API：http://localhost:3000/api/im_');
     });
+
+    it('filters and exports accounts specifically bound to a Token', () => {
+      const token = accessTokenService.createToken({
+        name: '分组测试Token',
+        totalQuota: 50
+      });
+
+      const rawInput = `
+        group_user1@mail.com----passGroup1
+        group_user2@mail.com----passGroup2
+      `;
+
+      apiKeyService.batchImport(rawInput, {
+        tokenId: token.id,
+        batchName: 'Token分组'
+      });
+
+      // Query specifically by tokenId
+      const tokenKeys = apiKeyService.queryKeys({ tokenId: token.id, pageSize: 100 });
+      expect(tokenKeys.items).toHaveLength(2);
+      expect(tokenKeys.items.map((k) => k.accountEmail)).toContain('group_user1@mail.com');
+      expect(tokenKeys.items.map((k) => k.accountEmail)).toContain('group_user2@mail.com');
+
+      // Export specifically for this token
+      const exported = apiKeyService.exportKeysFormatted(tokenKeys.items, 'http://127.0.0.1:3000', 'custom', token.token);
+      expect(exported).toContain(`?token=${token.token}`);
+      expect(exported).toContain('group_user1@mail.com');
+      expect(exported).toContain('group_user2@mail.com');
+      expect(exported).not.toContain('batch_user2@outlook.com');
+    });
   });
 
   describe('Diagnostic Logger Service', () => {
@@ -163,6 +195,46 @@ describe('Backyard Management & API Engine', () => {
 
       expect(res.total).toBeGreaterThanOrEqual(1);
       expect(res.items[0].stage).toBe('打开登录框');
+    });
+
+    it('records and isolates diagnostic traces by traceId', () => {
+      const traceId1 = `trace-uuid-${randomUUID()}`;
+      const traceId2 = `trace-uuid-${randomUUID()}`;
+
+      diagLogger.info('web_rpa', '启动浏览器', '启动会话 1', undefined, 'u1@mail.com', traceId1);
+      diagLogger.info('web_rpa', '等待收件箱', '等待邮件 1', undefined, 'u1@mail.com', traceId1);
+      diagLogger.info('web_rpa', '启动浏览器', '启动会话 2', undefined, 'u2@mail.com', traceId2);
+
+      const res1 = diagLogger.query({ traceId: traceId1 });
+      expect(res1.items).toHaveLength(2);
+      expect(res1.items.every((it) => it.traceId === traceId1)).toBe(true);
+
+      const res2 = diagLogger.query({ traceId: traceId2 });
+      expect(res2.items).toHaveLength(1);
+      expect(res2.items[0].traceId).toBe(traceId2);
+    });
+
+    it('stores and retrieves forensics snapshot details with screenshots', () => {
+      const traceId = `trace-forensics-${randomUUID()}`;
+      const snapshot = {
+        finalUrl: 'https://consent.mail.com/ui/consent',
+        pageTitle: 'Mail.com - Privacy Consent',
+        pageCategory: 'consent_interstitial',
+        detectedPrompt: 'Please agree to our updated privacy policy',
+        screenshotBase64: 'data:image/jpeg;base64,/9j/4AAQSkZJRg...',
+        framesCount: 2
+      };
+
+      diagLogger.warn('web_rpa', '等待收件箱', '30秒内未加载出收件箱列表', snapshot, 'test@mail.com', traceId);
+
+      const res = diagLogger.query({ traceId });
+      expect(res.items).toHaveLength(1);
+      expect(res.items[0].details).toBeDefined();
+
+      const parsed = JSON.parse(res.items[0].details!);
+      expect(parsed.pageCategory).toBe('consent_interstitial');
+      expect(parsed.screenshotBase64).toContain('data:image/jpeg;base64');
+      expect(parsed.finalUrl).toBe('https://consent.mail.com/ui/consent');
     });
   });
 

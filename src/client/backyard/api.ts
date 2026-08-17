@@ -137,6 +137,7 @@ export const backyardApi = {
     level?: string;
     engine?: string;
     search?: string;
+    traceId?: string;
     startDate?: string;
     endDate?: string;
   }) {
@@ -146,6 +147,7 @@ export const backyardApi = {
     if (params.level && params.level !== 'all') query.set('level', params.level);
     if (params.engine && params.engine !== 'all') query.set('engine', params.engine);
     if (params.search) query.set('search', params.search);
+    if (params.traceId) query.set('traceId', params.traceId);
     if (params.startDate) query.set('startDate', params.startDate);
     if (params.endDate) query.set('endDate', params.endDate);
 
@@ -216,8 +218,8 @@ export const backyardApi = {
     });
   },
 
-  async batchExportKeys(payload: { keyIds?: string[]; format: 'custom' | 'csv' | 'json' | 'urls'; token?: string }) {
-    return request<{ formatted: string; count: number }>('/keys/batch-export', {
+  async batchExportKeys(payload: { keyIds?: string[]; format: 'custom' | 'csv' | 'json' | 'urls'; token?: string; tokenId?: string }) {
+    return request<{ formatted: string; count: number; token?: string; tokenId?: string }>('/keys/batch-export', {
       method: 'POST',
       body: JSON.stringify(payload)
     });

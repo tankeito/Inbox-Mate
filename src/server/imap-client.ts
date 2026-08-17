@@ -16,6 +16,7 @@ export interface FetchAccountOptions {
   signal: AbortSignal;
   onProgress: (state: 'authenticating' | 'connecting' | 'searching' | 'parsing') => void;
   resolveMicrosoftAccessToken: (sessionId: string, email: string) => string;
+  traceId?: string;
 }
 
 interface CandidateMessage {

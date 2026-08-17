@@ -12,6 +12,7 @@ export interface DiagEvent {
   stage: string;
   message: string;
   details?: Record<string, unknown> | string;
+  traceId?: string;
 }
 
 export interface DiagLogItem {
@@ -23,6 +24,7 @@ export interface DiagLogItem {
   stage: string;
   message: string;
   details?: string;
+  traceId?: string;
 }
 
 export interface DiagQuery {
@@ -31,6 +33,7 @@ export interface DiagQuery {
   level?: string;
   engine?: string;
   search?: string;
+  traceId?: string;
   startDate?: string;
   endDate?: string;
 }
@@ -49,8 +52,8 @@ class DiagnosticLoggerService {
           : null;
 
       const stmt = db.prepare(`
-        INSERT INTO diagnostic_logs (id, timestamp, level, engine, account_email, stage, message, details)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO diagnostic_logs (id, timestamp, level, engine, account_email, stage, message, details, trace_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       stmt.run(
@@ -61,7 +64,8 @@ class DiagnosticLoggerService {
         maskedEmail || null,
         event.stage,
         event.message,
-        detailsStr
+        detailsStr,
+        event.traceId || null
       );
 
       // Keep recent logs pruned to maximum 10,000 items to conserve disk
@@ -76,20 +80,20 @@ class DiagnosticLoggerService {
     }
   }
 
-  public info(engine: EngineType, stage: string, message: string, details?: any, email?: string) {
-    this.log({ level: 'INFO', engine, stage, message, details, accountEmail: email });
+  public info(engine: EngineType, stage: string, message: string, details?: any, email?: string, traceId?: string) {
+    this.log({ level: 'INFO', engine, stage, message, details, accountEmail: email, traceId });
   }
 
-  public warn(engine: EngineType, stage: string, message: string, details?: any, email?: string) {
-    this.log({ level: 'WARN', engine, stage, message, details, accountEmail: email });
+  public warn(engine: EngineType, stage: string, message: string, details?: any, email?: string, traceId?: string) {
+    this.log({ level: 'WARN', engine, stage, message, details, accountEmail: email, traceId });
   }
 
-  public error(engine: EngineType, stage: string, message: string, details?: any, email?: string) {
-    this.log({ level: 'ERROR', engine, stage, message, details, accountEmail: email });
+  public error(engine: EngineType, stage: string, message: string, details?: any, email?: string, traceId?: string) {
+    this.log({ level: 'ERROR', engine, stage, message, details, accountEmail: email, traceId });
   }
 
-  public debug(engine: EngineType, stage: string, message: string, details?: any, email?: string) {
-    this.log({ level: 'DEBUG', engine, stage, message, details, accountEmail: email });
+  public debug(engine: EngineType, stage: string, message: string, details?: any, email?: string, traceId?: string) {
+    this.log({ level: 'DEBUG', engine, stage, message, details, accountEmail: email, traceId });
   }
 
   public query(params: DiagQuery): { items: DiagLogItem[]; total: number; page: number; pageSize: number; totalPages: number } {
@@ -100,10 +104,16 @@ class DiagnosticLoggerService {
     const conditions: string[] = ['1=1'];
     const args: any[] = [];
 
+    if (params.traceId && params.traceId.trim()) {
+      const tid = params.traceId.trim();
+      conditions.push('(trace_id = ? OR details LIKE ?)');
+      args.push(tid, `%${tid}%`);
+    }
+
     if (params.search && params.search.trim()) {
       const q = `%${params.search.trim()}%`;
-      conditions.push('(message LIKE ? OR stage LIKE ? OR account_email LIKE ? OR details LIKE ?)');
-      args.push(q, q, q, q);
+      conditions.push('(message LIKE ? OR stage LIKE ? OR account_email LIKE ? OR details LIKE ? OR trace_id LIKE ?)');
+      args.push(q, q, q, q, q);
     }
 
     if (params.level && params.level !== 'all') {
@@ -153,7 +163,8 @@ class DiagnosticLoggerService {
       accountEmail: r.account_email,
       stage: r.stage,
       message: r.message,
-      details: r.details
+      details: r.details,
+      traceId: r.trace_id || undefined
     }));
 
     return {

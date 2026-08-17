@@ -32,6 +32,7 @@ export interface DiagLogItem {
   stage: string;
   message: string;
   details?: string;
+  traceId?: string;
 }
 
 export interface ApiKeyItem {

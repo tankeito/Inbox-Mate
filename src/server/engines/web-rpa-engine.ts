@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import net from 'node:net';
+import { randomUUID } from 'node:crypto';
 import { simpleParser } from 'mailparser';
 import { chromium, type Browser, type BrowserContext, type Frame, type Locator, type Page, type Response } from 'playwright';
 import type { AccountInput, CodeMatch, EmailItem } from '../../shared/types.js';
@@ -569,10 +570,20 @@ export async function ensureMailComLoginFormVisible(
 }
 
 async function parseMailboxDom(page: Page): Promise<CapturedMailPayload[]> {
-  const frame = page.frames().find((candidate) => candidate.url().startsWith('https://webmailer.mail.com/'));
-  if (!frame) return [];
+  const frames = page.frames();
+  let targetFrame: Frame | undefined = frames.find((candidate) => candidate.url().startsWith('https://webmailer.mail.com/'));
+  if (!targetFrame) {
+    for (const f of frames) {
+      const count = await f.locator('list-mail-item, [data-test="mail-item"]').count().catch(() => 0);
+      if (count > 0) {
+        targetFrame = f;
+        break;
+      }
+    }
+  }
+  if (!targetFrame) return [];
 
-  const items = frame.locator('list-mail-item');
+  const items = targetFrame.locator('list-mail-item');
   const count = await items.count().catch(() => 0);
   const result: CapturedMailPayload[] = [];
   for (let index = 0; index < count; index += 1) {
@@ -608,11 +619,143 @@ async function htmlToText(html: string): Promise<string> {
 async function findWebmailerFrame(page: Page, timeoutMs: number): Promise<Frame | undefined> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const frame = page.frames().find((candidate) => candidate.url().startsWith('https://webmailer.mail.com/'));
-    if (frame && (await frame.locator('list-mail-item').count().catch(() => 0)) > 0) return frame;
+    const frames = page.frames();
+    for (const frame of frames) {
+      const url = frame.url().toLowerCase();
+      if (url.includes('webmailer.mail.com') || url.includes('/mail/') || url.includes('/mailbox/')) {
+        const count = await frame.locator('list-mail-item, [data-test="mail-item"]').count().catch(() => 0);
+        if (count > 0) return frame;
+      }
+    }
+    for (const frame of frames) {
+      const count = await frame.locator('list-mail-item').count().catch(() => 0);
+      if (count > 0) return frame;
+    }
     await page.waitForTimeout(250);
   }
   return undefined;
+}
+
+async function tryAutoSkipInterstitials(page: Page): Promise<boolean> {
+  const skipSelectors = [
+    'button:has-text("Continue to Mail")',
+    'button:has-text("Continue to mailbox")',
+    'button:has-text("Continue to Inbox")',
+    'button:has-text("Skip")',
+    'button:has-text("Remind me later")',
+    'button:has-text("I agree")',
+    'button:has-text("Accept all")',
+    'button:has-text("Agree and continue")',
+    'button#onetrust-accept-btn-handler',
+    '[data-test="skip-button"]',
+    '[data-test="continue-button"]',
+    'a.pos-button',
+    '.consent-accept',
+    '.interstitial-skip'
+  ];
+  for (const sel of skipSelectors) {
+    try {
+      const btn = page.locator(sel).filter({ visible: true }).first();
+      if ((await btn.count().catch(() => 0)) > 0) {
+        await btn.click({ timeout: 1200 }).catch(() => {});
+        return true;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return false;
+}
+
+async function captureForensicsSnapshot(page: Page | null, stage: string): Promise<{
+  finalUrl: string;
+  pageTitle: string;
+  pageCategory: string;
+  detectedPrompt: string;
+  screenshotBase64?: string;
+  framesCount: number;
+}> {
+  if (!page) {
+    return {
+      finalUrl: 'N/A',
+      pageTitle: 'N/A',
+      pageCategory: 'browser_not_initialized',
+      detectedPrompt: '',
+      framesCount: 0
+    };
+  }
+
+  let finalUrl = '';
+  let pageTitle = '';
+  let detectedPrompt = '';
+  let screenshotBase64: string | undefined = undefined;
+  let framesCount = 0;
+
+  try {
+    finalUrl = page.url();
+    pageTitle = await page.title().catch(() => '');
+    framesCount = page.frames().length;
+
+    detectedPrompt = await page.evaluate(() => {
+      const errorSelectors = [
+        '[role="alert"]',
+        '.error-message',
+        '.login-error',
+        '.notification',
+        '.alert',
+        'h1',
+        'h2',
+        'p.error',
+        '.interstitial-text',
+        '.pos-headline'
+      ];
+      for (const sel of errorSelectors) {
+        const el = document.querySelector(sel);
+        if (el && el.textContent?.trim()) {
+          return el.textContent.trim().slice(0, 300);
+        }
+      }
+      return '';
+    }).catch(() => '');
+
+    const buffer = await page.screenshot({
+      type: 'jpeg',
+      quality: 45,
+      scale: 'css'
+    }).catch(() => null);
+
+    if (buffer) {
+      screenshotBase64 = `data:image/jpeg;base64,${buffer.toString('base64')}`;
+    }
+  } catch {
+    // fallback
+  }
+
+  let pageCategory = 'inbox_loading_timeout';
+  const normUrl = finalUrl.toLowerCase();
+  const normTitle = pageTitle.toLowerCase();
+  const normPrompt = detectedPrompt.toLowerCase();
+
+  if (normUrl.includes('consent') || normTitle.includes('consent') || normPrompt.includes('consent')) {
+    pageCategory = 'consent_interstitial';
+  } else if (normUrl.includes('challenge') || normUrl.includes('verify') || normPrompt.includes('security') || normPrompt.includes('phone')) {
+    pageCategory = 'security_challenge';
+  } else if (normUrl.includes('welcome') || normUrl.includes('promo') || normTitle.includes('special offer') || normPrompt.includes('welcome')) {
+    pageCategory = 'promo_interstitial';
+  } else if (normUrl.includes('login') || normPrompt.includes('incorrect') || normPrompt.includes('invalid') || normPrompt.includes('password')) {
+    pageCategory = 'login_failed';
+  } else if (normPrompt.includes('human') || normPrompt.includes('captcha') || normUrl.includes('cf-chl')) {
+    pageCategory = 'cloudflare_captcha';
+  }
+
+  return {
+    finalUrl,
+    pageTitle,
+    pageCategory,
+    detectedPrompt,
+    screenshotBase64,
+    framesCount
+  };
 }
 
 async function fetchBodyViaApi(
@@ -792,8 +935,10 @@ export async function fetchAccountVerificationCodeViaWebRpa(
 
   const email = account.email;
   const password = account.auth.secret;
+  const traceId = options.traceId || randomUUID();
   let stage = '启动浏览器';
   let context: BrowserContext | null = null;
+  let activePage: Page | null = null;
   const proxy = await detectRpaProxy();
   logNetworkResolution(proxy);
 
@@ -811,8 +956,9 @@ export async function fetchAccountVerificationCodeViaWebRpa(
       'web_rpa',
       stage,
       `启动无头浏览器 [并发任务数: ${currentConcurrent}, 代理: ${proxy.server ?? '直连'}]`,
-      { proxy: proxy.source, concurrentTasks: currentConcurrent },
-      email
+      { proxy: proxy.source, proxyServer: proxy.server, concurrentTasks: currentConcurrent, traceId },
+      email,
+      traceId
     );
     const browser = await acquireBrowser();
     context = await browser.newContext({
@@ -823,6 +969,7 @@ export async function fetchAccountVerificationCodeViaWebRpa(
     if (options.signal.aborted) throw new InboxMateError('CANCELLED');
 
     const page = await context.newPage();
+    activePage = page;
 
     // Resource Abort Optimization: Strip heavy media, fonts, ads, and trackers while safely whitelisting 1st-party
     await page.route('**/*', (route) => {
@@ -925,11 +1072,12 @@ export async function fetchAccountVerificationCodeViaWebRpa(
 
     options.onProgress('connecting');
     stage = '打开 Mail.com';
-    diagLogger.debug('web_rpa', stage, `正在导航到 Mail.com 首页 (耗时: ${formatDuration(Date.now() - startTime)})`, undefined, email);
+    diagLogger.debug('web_rpa', stage, `正在导航到 Mail.com 首页 (耗时: ${formatDuration(Date.now() - startTime)})`, { url: MAIL_COM_HOME }, email, traceId);
     await page.goto(MAIL_COM_HOME, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT_MS });
     const initialContent = await page.content().catch(() => '');
     if (isCaptchaPage(initialContent)) {
-      diagLogger.warn('web_rpa', stage, '首页触发 Cloudflare/验证码阻拦', { concurrentTasks: activeRunningAccounts }, email);
+      const snapshot = await captureForensicsSnapshot(page, stage);
+      diagLogger.warn('web_rpa', stage, '首页触发 Cloudflare/验证码阻拦', { ...snapshot, concurrentTasks: activeRunningAccounts }, email, traceId);
       throw new InboxMateError('CAPTCHA_TRIGGERED');
     }
 
@@ -942,7 +1090,7 @@ export async function fetchAccountVerificationCodeViaWebRpa(
 
     options.onProgress('searching');
     stage = '提交登录';
-    diagLogger.debug('web_rpa', stage, `提交登录表单 (当前并发: ${activeRunningAccounts})`, undefined, email);
+    diagLogger.debug('web_rpa', stage, `提交登录表单 (当前并发: ${activeRunningAccounts})`, { currentUrl: page.url() }, email, traceId);
     const loginForm = page.locator('form').filter({ has: emailInput });
     const submitButton = loginForm.locator('button[type="submit"]').filter({ visible: true }).first();
     if ((await submitButton.count()) > 0) await submitButton.click({ timeout: 10_000 });
@@ -955,6 +1103,8 @@ export async function fetchAccountVerificationCodeViaWebRpa(
 
     stage = '等待收件箱';
     const deadline = Date.now() + 30_000;
+    let lastSkipAttempt = 0;
+
     while (Date.now() < deadline && !mailListSeen) {
       const remaining = deadline - Date.now();
       const loaded = await Promise.race([
@@ -963,26 +1113,53 @@ export async function fetchAccountVerificationCodeViaWebRpa(
       ]);
       if (loaded || mailListSeen) break;
 
+      // Auto-skip interstitials / promos / consent every 1.5s
+      if (Date.now() - lastSkipAttempt > 1500) {
+        lastSkipAttempt = Date.now();
+        await tryAutoSkipInterstitials(page);
+      }
+
       const currentUrl = page.url();
       const content = await page.content().catch(() => '');
       if (isCaptchaPage(content)) {
-        diagLogger.warn('web_rpa', stage, '登录中触发验证码', { url: currentUrl, concurrentTasks: activeRunningAccounts }, email);
+        const snapshot = await captureForensicsSnapshot(page, stage);
+        diagLogger.warn('web_rpa', stage, '登录中触发验证码阻拦', { ...snapshot, concurrentTasks: activeRunningAccounts }, email, traceId);
         throw new InboxMateError('CAPTCHA_TRIGGERED');
       }
       if (isAuthenticationFailure(currentUrl, content)) {
-        diagLogger.warn('web_rpa', stage, '账号或密码错误', { url: currentUrl }, email);
+        const snapshot = await captureForensicsSnapshot(page, stage);
+        diagLogger.warn('web_rpa', stage, '账号或密码错误', { ...snapshot, concurrentTasks: activeRunningAccounts }, email, traceId);
         throw new InboxMateError('AUTH_FAILED');
       }
     }
 
     if (!mailListSeen) {
       const content = await page.content().catch(() => '');
-      if (isCaptchaPage(content)) throw new InboxMateError('CAPTCHA_TRIGGERED');
-      if (isAuthenticationFailure(page.url(), content)) throw new InboxMateError('AUTH_FAILED');
-      diagLogger.warn('web_rpa', stage, `30秒内未加载出收件箱列表 (并发: ${activeRunningAccounts}, 耗时: ${formatDuration(Date.now() - startTime)})`, {
-        url: page.url(),
-        concurrentTasks: activeRunningAccounts
-      }, email);
+      const snapshot = await captureForensicsSnapshot(page, stage);
+
+      if (isCaptchaPage(content)) {
+        diagLogger.warn('web_rpa', stage, '登录后检测到验证码', { ...snapshot, concurrentTasks: activeRunningAccounts }, email, traceId);
+        throw new InboxMateError('CAPTCHA_TRIGGERED');
+      }
+      if (isAuthenticationFailure(page.url(), content)) {
+        diagLogger.warn('web_rpa', stage, '登录后检测到密码错误', { ...snapshot, concurrentTasks: activeRunningAccounts }, email, traceId);
+        throw new InboxMateError('AUTH_FAILED');
+      }
+
+      diagLogger.warn(
+        'web_rpa',
+        stage,
+        `30秒内未加载出收件箱列表 (并发: ${activeRunningAccounts}, 耗时: ${formatDuration(Date.now() - startTime)})`,
+        {
+          ...snapshot,
+          concurrentTasks: activeRunningAccounts,
+          durationMs: Date.now() - startTime,
+          proxy: proxy.server || '直连 Direct'
+        },
+        email,
+        traceId
+      );
+
       throw new InboxMateError(
         'TIMEOUT',
         400,
@@ -999,8 +1176,10 @@ export async function fetchAccountVerificationCodeViaWebRpa(
     if (capturedMails.length === 0) mergeCapturedMails(capturedMails, await parseMailboxDom(page));
     const selectedMails = selectMailComMessages(capturedMails, options);
     diagLogger.info('web_rpa', stage, `捕获到 ${capturedMails.length} 封邮件，筛选出 ${selectedMails.length} 封`, {
-      concurrentTasks: activeRunningAccounts
-    }, email);
+      concurrentTasks: activeRunningAccounts,
+      totalCaptured: capturedMails.length,
+      selectedCount: selectedMails.length
+    }, email, traceId);
 
     stage = '抓取邮件正文';
     await hydrateMailBodies(
@@ -1018,7 +1197,7 @@ export async function fetchAccountVerificationCodeViaWebRpa(
       messageCount: mapped.messages.length,
       durationMs: Date.now() - startTime,
       concurrentTasks: activeRunningAccounts
-    }, email);
+    }, email, traceId);
 
     return mapped;
   } catch (error) {
@@ -1027,16 +1206,18 @@ export async function fetchAccountVerificationCodeViaWebRpa(
       diagLogger.warn('web_rpa', stage, `业务异常: ${error.message} (并发任务数: ${activeRunningAccounts})`, {
         code: error.code,
         concurrentTasks: activeRunningAccounts
-      }, email);
+      }, email, traceId);
       throw error;
     }
     const classified = classifyBrowserError(error, stage, proxy);
     console.error(`[web-rpa] stage=${stage} error=${error instanceof Error ? error.message : String(error)}`);
+    const snapshot = await captureForensicsSnapshot(activePage, stage);
     diagLogger.error('web_rpa', stage, `浏览器抓取异常: ${error instanceof Error ? error.message : String(error)} (并发: ${activeRunningAccounts})`, {
+      ...snapshot,
       stage,
       concurrentTasks: activeRunningAccounts,
       proxy: proxy.server
-    }, email);
+    }, email, traceId);
     throw classified;
   } finally {
     options.signal.removeEventListener('abort', closeOnAbort);

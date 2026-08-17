@@ -57,6 +57,7 @@ class DatabaseService {
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec('PRAGMA synchronous = NORMAL;');
     this.db.exec('PRAGMA foreign_keys = ON;');
+    this.db.exec('PRAGMA busy_timeout = 5000;');
   }
 
   private initTables() {
@@ -105,7 +106,8 @@ class DatabaseService {
         account_email TEXT,
         stage TEXT NOT NULL,
         message TEXT NOT NULL,
-        details TEXT
+        details TEXT,
+        trace_id TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_diag_logs_timestamp ON diagnostic_logs(timestamp DESC);
@@ -185,6 +187,12 @@ class DatabaseService {
       }
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_usage_logs_token_id ON usage_logs(token_id);');
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_usage_logs_token ON usage_logs(token);');
+
+      const diagColumns = (this.db.prepare('PRAGMA table_info(diagnostic_logs)').all() as any[]).map((c) => c.name);
+      if (!diagColumns.includes('trace_id')) {
+        this.db.exec('ALTER TABLE diagnostic_logs ADD COLUMN trace_id TEXT;');
+      }
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_diag_logs_trace_id ON diagnostic_logs(trace_id);');
 
       const keyColumns = (this.db.prepare('PRAGMA table_info(api_keys)').all() as any[]).map((c) => c.name);
       if (!keyColumns.includes('token_id')) {

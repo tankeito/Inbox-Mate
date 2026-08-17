@@ -193,6 +193,7 @@ export function createBackyardRouter(): express.Router {
       const level = (req.query.level as string) || 'all';
       const engine = (req.query.engine as string) || 'all';
       const search = (req.query.search as string) || '';
+      const traceId = (req.query.traceId as string) || undefined;
       const startDate = (req.query.startDate as string) || undefined;
       const endDate = (req.query.endDate as string) || undefined;
 
@@ -202,6 +203,7 @@ export function createBackyardRouter(): express.Router {
         level,
         engine,
         search,
+        traceId,
         startDate,
         endDate
       });
@@ -304,18 +306,37 @@ export function createBackyardRouter(): express.Router {
 
   router.post('/keys/batch-export', requireAdmin, (req: Request, res: Response) => {
     try {
-      const { keyIds, format = 'custom', token } = req.body || {};
+      const { keyIds, format = 'custom', token, tokenId } = req.body || {};
       const host = req.get('host') || 'localhost:3000';
       const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
       const domain = `${protocol}://${host}`;
 
-      const allKeys = apiKeyService.queryKeys({ page: 1, pageSize: 5000 }).items;
+      let activeTokenStr = typeof token === 'string' && token.trim() ? token.trim() : undefined;
+      let activeTokenId = typeof tokenId === 'string' && tokenId.trim() ? tokenId.trim() : undefined;
+
+      if (activeTokenId && !activeTokenStr) {
+        const t = accessTokenService.getTokenById(activeTokenId);
+        if (t) activeTokenStr = t.token;
+      }
+      if (activeTokenStr && !activeTokenId) {
+        const t = accessTokenService.getTokenByString(activeTokenStr);
+        if (t) activeTokenId = t.id;
+      }
+
+      const queryParams: any = { page: 1, pageSize: 10000 };
+      if (activeTokenId) {
+        queryParams.tokenId = activeTokenId;
+      } else if (activeTokenStr) {
+        queryParams.token = activeTokenStr;
+      }
+
+      const allKeys = apiKeyService.queryKeys(queryParams).items;
       const targetKeys = Array.isArray(keyIds) && keyIds.length > 0
         ? allKeys.filter((k) => keyIds.includes(k.id))
         : allKeys;
 
-      const formatted = apiKeyService.exportKeysFormatted(targetKeys, domain, format, typeof token === 'string' ? token : undefined);
-      res.json({ formatted, count: targetKeys.length });
+      const formatted = apiKeyService.exportKeysFormatted(targetKeys, domain, format, activeTokenStr);
+      res.json({ formatted, count: targetKeys.length, token: activeTokenStr, tokenId: activeTokenId });
     } catch (err: any) {
       res.status(400).json({ error: err.message || '导出失败' });
     }

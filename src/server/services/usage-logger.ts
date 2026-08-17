@@ -4,6 +4,7 @@ import { db } from '../db/database.js';
 import { maskEmail } from '../providers.js';
 
 export interface UsageEvent {
+  id?: string;
   clientIp: string;
   region?: string;
   emailAccount: string;
@@ -126,7 +127,7 @@ async function fetchIpGeoAsync(ip: string) {
 export class UsageLoggerService {
   public record(event: UsageEvent): void {
     try {
-      const id = randomUUID();
+      const id = event.id || randomUUID();
       const ip = event.clientIp || '127.0.0.1';
       const region = event.region || resolveIpRegion(ip);
       const rawEmail = (event.emailAccount || '').trim();

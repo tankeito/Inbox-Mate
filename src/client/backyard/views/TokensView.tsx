@@ -206,6 +206,9 @@ export const TokensView: React.FC = () => {
     setTokenLogsLoading(true);
     try {
       const res = await backyardApi.getTokenLogs(item.id, { page: p, pageSize: size });
+      if (res.token) {
+        setTokenForLogs(res.token);
+      }
       setTokenLogs(res.items);
       setTokenLogsTotal(res.total);
       setTokenLogsTotalPages(res.totalPages);
@@ -748,26 +751,33 @@ export const TokensView: React.FC = () => {
                 </div>
 
                 {/* Progress bar */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginBottom: '4px' }}>
-                    <span style={{ fontWeight: 600, color: 'var(--by-text-primary)' }}>
-                      已消费 {tokenForLogs.usedQuota} / 共 {tokenForLogs.totalQuota} 次
-                    </span>
-                    <span>
-                      剩余可用: <strong style={{ color: tokenForLogs.remainingQuota > 0 ? 'var(--by-success)' : 'var(--by-danger)' }}>{tokenForLogs.remainingQuota}</strong> 次
-                    </span>
-                  </div>
-                  <div style={{ height: '6px', background: 'var(--by-bg-card)', borderRadius: '3px', overflow: 'hidden' }}>
-                    <div
-                      style={{
-                        height: '100%',
-                        width: `${Math.min(100, Math.round((tokenForLogs.usedQuota / tokenForLogs.totalQuota) * 100))}%`,
-                        background: tokenForLogs.remainingQuota === 0 ? 'var(--by-danger)' : 'var(--by-primary)',
-                        transition: 'width 0.3s ease'
-                      }}
-                    />
-                  </div>
-                </div>
+                {(() => {
+                  const actualUsed = (tokenLogsTotal > 0 || tokenLogs.length > 0) ? tokenLogsTotal : tokenForLogs.usedQuota;
+                  const actualRemaining = Math.max(0, tokenForLogs.totalQuota - actualUsed);
+                  const percent = Math.min(100, Math.round((actualUsed / tokenForLogs.totalQuota) * 100));
+                  return (
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginBottom: '4px' }}>
+                        <span style={{ fontWeight: 600, color: 'var(--by-text-primary)' }}>
+                          已消费 {actualUsed} / 共 {tokenForLogs.totalQuota} 次
+                        </span>
+                        <span>
+                          剩余可用: <strong style={{ color: actualRemaining > 0 ? 'var(--by-success)' : 'var(--by-danger)' }}>{actualRemaining}</strong> 次
+                        </span>
+                      </div>
+                      <div style={{ height: '6px', background: 'var(--by-bg-card)', borderRadius: '3px', overflow: 'hidden' }}>
+                        <div
+                          style={{
+                            height: '100%',
+                            width: `${percent}%`,
+                            background: actualRemaining === 0 ? 'var(--by-danger)' : 'var(--by-primary)',
+                            transition: 'width 0.3s ease'
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Log Items Header */}
@@ -831,7 +841,9 @@ export const TokensView: React.FC = () => {
                               <div style={{ fontWeight: 600, color: 'var(--by-text-primary)' }}>{log.emailAccount}</div>
                             </td>
                             <td>
-                              <span style={{ fontSize: '0.78rem' }}>{log.provider}</span>
+                              <span style={{ fontSize: '0.78rem' }}>
+                                {log.provider === 'mailcom' ? 'mail.com' : log.provider}
+                              </span>
                             </td>
                             <td>
                               <span className="by-badge by-badge-info" style={{ fontSize: '0.72rem' }}>

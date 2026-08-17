@@ -94,8 +94,9 @@ export const ApiKeyView: React.FC = () => {
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportFormat, setExportFormat] = useState<'custom' | 'csv' | 'json' | 'urls'>('custom');
   const [availableTokens, setAvailableTokens] = useState<AccessTokenItem[]>([]);
-  const [selectedTokenForExport, setSelectedTokenForExport] = useState('');
+  const [selectedTokenIdForExport, setSelectedTokenIdForExport] = useState('');
   const [exportedContent, setExportedContent] = useState('');
+  const [exportCount, setExportCount] = useState(0);
   const [exporting, setExporting] = useState(false);
   const [exportCopied, setExportCopied] = useState(false);
 
@@ -306,13 +307,21 @@ export const ApiKeyView: React.FC = () => {
     setExporting(true);
     try {
       const tokenRes = await backyardApi.getTokens({ pageSize: 100 });
-      setAvailableTokens(tokenRes.items.filter((t) => t.isActive && !t.isExhausted));
+      const activeTokens = tokenRes.items.filter((t) => t.isActive && !t.isExhausted);
+      setAvailableTokens(activeTokens);
+
+      const targetTokenId = (tokenFilter !== 'all' ? tokenFilter : selectedTokenIdForExport) || '';
+      setSelectedTokenIdForExport(targetTokenId);
+
+      const targetToken = activeTokens.find((t) => t.id === targetTokenId);
 
       const res = await backyardApi.batchExportKeys({
         format,
-        token: selectedTokenForExport || undefined
+        tokenId: targetTokenId || undefined,
+        token: targetToken?.token
       });
       setExportedContent(res.formatted);
+      setExportCount(res.count || 0);
     } catch (err: any) {
       alert(err.message || '导出失败');
     } finally {
@@ -324,11 +333,14 @@ export const ApiKeyView: React.FC = () => {
     setExportFormat(format);
     setExporting(true);
     try {
+      const targetToken = availableTokens.find((t) => t.id === selectedTokenIdForExport);
       const res = await backyardApi.batchExportKeys({
         format,
-        token: selectedTokenForExport || undefined
+        tokenId: selectedTokenIdForExport || undefined,
+        token: targetToken?.token
       });
       setExportedContent(res.formatted);
+      setExportCount(res.count || 0);
     } catch (err: any) {
       alert(err.message || '导出失败');
     } finally {
@@ -336,15 +348,18 @@ export const ApiKeyView: React.FC = () => {
     }
   };
 
-  const handleExportTokenChange = async (tokenStr: string) => {
-    setSelectedTokenForExport(tokenStr);
+  const handleExportTokenChange = async (tokenIdStr: string) => {
+    setSelectedTokenIdForExport(tokenIdStr);
     setExporting(true);
     try {
+      const targetToken = availableTokens.find((t) => t.id === tokenIdStr);
       const res = await backyardApi.batchExportKeys({
         format: exportFormat,
-        token: tokenStr || undefined
+        tokenId: tokenIdStr || undefined,
+        token: targetToken?.token
       });
       setExportedContent(res.formatted);
+      setExportCount(res.count || 0);
     } catch (err: any) {
       alert(err.message || '更新导出内容失败');
     } finally {
@@ -696,8 +711,8 @@ export const ApiKeyView: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleBatchImportSubmit}>
-              <div className="by-modal-body">
+            <form onSubmit={handleBatchImportSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <div className="by-modal-body" style={{ overflowY: 'auto', flex: 1 }}>
                 <div style={{ marginBottom: '14px', fontSize: '0.84rem', color: 'var(--by-text-secondary)', lineHeight: 1.5 }}>
                   支持任意格式文本粘贴或直接上传 <code>.txt</code> 文件（系统智能识别邮箱和密码），如：<br />
                   <code style={{ color: 'var(--by-text-code)' }}>账号: anais_officiavhr@mail.com | 密码: oL9KZDccB</code><br />
@@ -1074,26 +1089,48 @@ export const ApiKeyView: React.FC = () => {
             </div>
 
             <div className="by-modal-body">
-              {/* Token Binding Selector (User Suggestion 2) */}
+              {/* Token Group Filter & Binding Selector */}
               <div style={{ marginBottom: '14px', background: 'var(--by-bg-input)', padding: '12px 14px', borderRadius: '8px', border: '1px solid var(--by-border)' }}>
-                <label className="by-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-                  <span>🔗 关联绑定授权 Token (选填，自动在 URL 后附加 ?token=xxx 生成开箱即用链接)</span>
+                <label className="by-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span>🏷️ 选择导出的 Token 分组 (1 个 Token 对应 1 组邮箱账号)</span>
+                  </span>
+                  <span style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)' }}>
+                    {exportCount > 0 ? `匹配到 ${exportCount} 个账号` : '暂无匹配账号'}
+                  </span>
                 </label>
                 <select
                   className="by-select"
-                  value={selectedTokenForExport}
+                  value={selectedTokenIdForExport}
                   onChange={(e) => handleExportTokenChange(e.target.value)}
                   style={{ fontSize: '0.86rem' }}
                 >
-                  <option value="">-- 不绑定 Token (仅导出基础 /api/{'{apiKey}'} 地址) --</option>
+                  <option value="">-- 全部已发行账号 (不按 Token 过滤) --</option>
                   {availableTokens.map((t) => (
-                    <option key={t.id} value={t.token}>
+                    <option key={t.id} value={t.id}>
                       {t.name} (余 {t.remainingQuota}/{t.totalQuota} 次) - {t.token.slice(0, 12)}...
                     </option>
                   ))}
                 </select>
-                <div style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)', marginTop: '4px' }}>
-                  选择后，导出的 API 链接将自动附带 <code>?token={'{token}'}</code>，使用者复制即可在脚本或浏览器中免密直接调用。
+
+                <div style={{ marginTop: '6px', fontSize: '0.76rem' }}>
+                  {selectedTokenIdForExport ? (
+                    exportCount > 0 ? (
+                      <div style={{ color: 'var(--by-success)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                        <CheckCircle2 size={13} />
+                        <span>已根据该 Token 筛选出 <strong>{exportCount}</strong> 个关联绑定的邮箱账号，导出的 API 链接已自动携带 <code>?token=...</code> 授权参数。</span>
+                      </div>
+                    ) : (
+                      <div style={{ color: 'var(--by-warning)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                        <AlertCircle size={13} />
+                        <span>该 Token 下暂无绑定的邮箱账号（在批量导入邮箱时选择此 Token 即可将账号与其绑定）。</span>
+                      </div>
+                    )
+                  ) : (
+                    <div style={{ color: 'var(--by-text-muted)' }}>
+                      当前导出所有已发行的邮箱账号（共 {exportCount} 个）。建议选择上方具体 Token 以导出对应的一组邮箱账号。
+                    </div>
+                  )}
                 </div>
               </div>
 
