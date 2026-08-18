@@ -10,6 +10,7 @@ import { diagLogger } from '../services/diag-logger.js';
 import { apiKeyService } from '../services/api-key-service.js';
 import { accessTokenService } from '../services/access-token-service.js';
 import { ipBlockService } from '../services/ip-block-service.js';
+import { systemSettingsService } from '../services/system-settings-service.js';
 import { getRpaStatus, restartSharedBrowser, testRpaHealthCheck } from '../engines/web-rpa-engine.js';
 
 function firstParam(value: string | string[] | undefined): string {
@@ -562,6 +563,46 @@ export function createBackyardRouter(): express.Router {
       res.json({ ok: success, message: success ? 'Token 已成功删除' : '未找到该 Token' });
     } catch (err: any) {
       res.status(400).json({ error: err.message || '删除 Token 失败' });
+    }
+  });
+
+  // System Concurrency & Hardware Tuning Settings
+  router.get('/settings/system', requireAdmin, (_req: Request, res: Response) => {
+    try {
+      const data = systemSettingsService.getFullPayload();
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '获取系统配置与硬件指标失败' });
+    }
+  });
+
+  router.post('/settings/system', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const updated = systemSettingsService.updateSettings(req.body || {});
+      const full = systemSettingsService.getFullPayload();
+      res.json({
+        ok: true,
+        message: '系统并发与调度设置已成功保存并立即热生效！',
+        settings: updated,
+        payload: full
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '保存系统配置失败' });
+    }
+  });
+
+  router.post('/settings/system/reset', requireAdmin, (_req: Request, res: Response) => {
+    try {
+      const reset = systemSettingsService.resetToDefaults();
+      const full = systemSettingsService.getFullPayload();
+      res.json({
+        ok: true,
+        message: '已恢复系统默认并发与调度配置！',
+        settings: reset,
+        payload: full
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '重置系统配置失败' });
     }
   });
 

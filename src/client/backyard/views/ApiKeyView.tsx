@@ -452,6 +452,7 @@ export const ApiKeyView: React.FC = () => {
             <select className="by-select" value={provider} onChange={(e) => { setProvider(e.target.value); setPage(1); }}>
               <option value="all">全部邮箱类型</option>
               <option value="mailcom">Mail.com</option>
+              <option value="offilive">OffiLive</option>
               <option value="microsoft">Microsoft</option>
               <option value="gmx">GMX</option>
               <option value="rambler">Rambler</option>
@@ -999,6 +1000,7 @@ export const ApiKeyView: React.FC = () => {
                     <select className="by-select" value={importProvider} onChange={(e) => setImportProvider(e.target.value)}>
                       <option value="smart">智能自动识别 (推荐)</option>
                       <option value="mailcom">Mail.com (Web RPA)</option>
+                      <option value="offilive">OffiLive (Web RPA)</option>
                       <option value="microsoft">Microsoft (Outlook / Live)</option>
                       <option value="gmx">GMX</option>
                       <option value="rambler">Rambler</option>

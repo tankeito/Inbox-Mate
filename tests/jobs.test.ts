@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AccountInput, CodeMatch, CreateJobInput } from '../src/shared/types';
 import { InboxMateError } from '../src/server/errors';
-import { JobManager } from '../src/server/jobs';
+import { JobManager, resolveRpaAccountTimeoutMs } from '../src/server/jobs';
 
 const account: AccountInput = {
   clientAccountId: 'account-1',
@@ -31,6 +31,12 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe('JobManager', () => {
+  it('reserves a longer account timeout for OffiLive without reducing larger configured values', () => {
+    expect(resolveRpaAccountTimeoutMs('offilive', 90_000)).toBe(285_000);
+    expect(resolveRpaAccountTimeoutMs('offilive', 300_000)).toBe(300_000);
+    expect(resolveRpaAccountTimeoutMs('mailcom', 90_000)).toBe(90_000);
+  });
+
   it('publishes account progress and only exposes the safe account snapshot', async () => {
     const runner = async (_input: AccountInput, options: { onProgress: (state: 'connecting' | 'searching') => void }): Promise<CodeMatch> => {
       options.onProgress('connecting');

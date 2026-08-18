@@ -326,7 +326,7 @@ export class UsageLoggerService {
       SELECT 
         strftime('%m-%d %H:00', created_at) as hour,
         COUNT(*) as count,
-        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success
+        SUM(CASE WHEN status IN ('success', 'no_code') THEN 1 ELSE 0 END) as success
       FROM usage_logs 
       WHERE created_at >= datetime('now', '-24 hours')
       GROUP BY hour

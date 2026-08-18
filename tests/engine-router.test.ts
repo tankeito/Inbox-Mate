@@ -80,6 +80,32 @@ describe('routeAccountEngine', () => {
     expect(routeAccountEngine(gmxAccount)).toBe('imap_pop3');
   });
 
+  it('routes OffiLive (@offilive.com / offidocs.com / onworks.net) accounts to web_rpa', () => {
+    const offiLiveAccount: AccountInput = {
+      clientAccountId: 'acc-offilive-1',
+      email: 'kristiannegraleski67@offilive.com',
+      provider: 'offilive',
+      auth: { type: 'app_password', secret: 'pass123' }
+    };
+    expect(routeAccountEngine(offiLiveAccount)).toBe('web_rpa');
+
+    const offiDocsAccount: AccountInput = {
+      clientAccountId: 'acc-offidocs-2',
+      email: 'tester@offidocs.com',
+      provider: 'custom',
+      auth: { type: 'app_password', secret: 'pass456' }
+    };
+    expect(routeAccountEngine(offiDocsAccount)).toBe('web_rpa');
+
+    const onWorksAccount: AccountInput = {
+      clientAccountId: 'acc-onworks-3',
+      email: 'user@onworks.net',
+      provider: 'custom',
+      auth: { type: 'app_password', secret: 'pass789' }
+    };
+    expect(routeAccountEngine(onWorksAccount)).toBe('web_rpa');
+  });
+
   it('routes custom POP3 accounts to imap_pop3', () => {
     const pop3Account: AccountInput = {
       clientAccountId: 'acc-7',

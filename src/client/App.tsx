@@ -49,6 +49,7 @@ type Provider =
   | 'rambler'
   | 'mailru'
   | 'mailcom'
+  | 'offilive'
   | 'yahoo'
   | 'gmail'
   | 'netease163'
@@ -161,6 +162,7 @@ const providerDetails: Record<Provider, { label: string; domain: string; authLab
   rambler: { label: 'Rambler', domain: 'Rambler 邮箱', authLabel: '密码', badgeColor: '#8b5cf6' },
   mailru: { label: 'Mail.ru', domain: 'Mail.ru 邮箱', authLabel: '密码', badgeColor: '#005ff9' },
   mailcom: { label: 'Mail.com', domain: 'Mail.com / Cheerful', authLabel: '密码', badgeColor: '#10b981' },
+  offilive: { label: 'OffiLive', domain: 'OffiLive / OffiDocs', authLabel: '密码', badgeColor: '#0098cc' },
   yahoo: { label: 'Yahoo', domain: 'Yahoo / Ymail', authLabel: '应用专用密码', badgeColor: '#6366f1' },
   gmail: { label: 'Gmail', domain: 'Google Mail', authLabel: '应用专用密码', badgeColor: '#ef4444' },
   netease163: { label: '网易邮箱', domain: '163 / 126 / Yeah', authLabel: '授权码 / 密码', badgeColor: '#dc2626' },
@@ -178,13 +180,13 @@ const providerDomains: Record<Provider, readonly string[]> = {
     'hotmail.com',
     'live.com',
     'msn.com',
-    'offilive.com',
     'outlook.de',
     'outlook.jp',
     'outlook.co.uk',
     'hotmail.co.uk',
     'hotmail.de',
   ],
+  offilive: ['offilive.com', 'offidocs.com', 'onworks.net'],
   gmx: ['gmx.com', 'gmx.net', 'gmx.de', 'gmx.at', 'gmx.ch', 'gmx.fr', 'gmx.co.uk', 'gmx.us', 'gmx.info'],
   rambler: ['rambler.ru', 'myrambler.ru', 'ro.ru', 'lenta.ru', 'autorambler.ru'],
   mailru: ['mail.ru', 'inbox.ru', 'list.ru', 'bk.ru', 'internet.ru'],
@@ -367,6 +369,16 @@ const isMailComRelatedEmail = (email: string): boolean => {
   return mailcomDomains.includes(domain) || domain === 'mail.com' || domain.endsWith('.mail.com') || domain.endsWith('cheerful.com');
 };
 
+const isOffiLiveRelatedEmail = (email: string): boolean => {
+  const domain = email.split('@')[1]?.toLowerCase().trim() || '';
+  const offiliveDomains = providerDomains.offilive;
+  return offiliveDomains.includes(domain) || domain === 'offilive.com' || domain.endsWith('.offilive.com') || domain === 'offidocs.com' || domain.endsWith('.offidocs.com') || domain === 'onworks.net' || domain.endsWith('.onworks.net');
+};
+
+const isRpaRelatedEmail = (email: string): boolean => {
+  return isMailComRelatedEmail(email) || isOffiLiveRelatedEmail(email);
+};
+
 const statusDetails: Record<
   AccountStatus,
   { label: string; tone: 'neutral' | 'working' | 'success' | 'warning' | 'danger' }
@@ -396,6 +408,8 @@ const isEmail = (value: string) => /^\S+@\S+\.\S+$/.test(value.trim());
 const accountKey = (email: string) => email.trim().toLowerCase();
 
 const providerForEmail = (email: string): Provider => {
+  if (isOffiLiveRelatedEmail(email)) return 'offilive';
+  if (isMailComRelatedEmail(email)) return 'mailcom';
   const domain = email.trim().toLowerCase().split('@')[1] ?? '';
   const found = (Object.keys(providerDomains) as Provider[]).find((provider) => providerDomains[provider].includes(domain));
   return found || 'custom';
@@ -945,16 +959,15 @@ export function App() {
       return;
     }
 
-    // Check if batch text contains Mail.com domains (allowed when authorized with Token)
-    const hasMailCom = result.accounts.some((acc) => isMailComRelatedEmail(acc.email) || acc.provider === 'mailcom');
+    const hasRpa = result.accounts.some((acc) => isRpaRelatedEmail(acc.email) || acc.provider === 'mailcom' || acc.provider === 'offilive');
     const hasTokenAccess = Boolean(accessToken && (!tokenInfo || tokenInfo.valid !== false));
 
-    if (hasMailCom && !hasTokenAccess) {
-      notify('error', '批量导入不支持mail.com邮箱，请使用单账号添加功能');
+    // RPA (Mail.com / OffiLive) Token permission checks
+    if (hasRpa && !hasTokenAccess) {
+      notify('error', '批量导入包含 Web RPA 邮箱（Mail.com / OffiLive），请先配置并验证授权 Token。');
       return;
     }
-
-    if (hasMailCom && accessToken && tokenInfo && tokenInfo.remainingQuota <= 0) {
+    if (hasRpa && accessToken && tokenInfo && tokenInfo.remainingQuota <= 0) {
       notify('error', '当前 Token 额度已耗尽，请联系管理员充值后再使用。');
       return;
     }
@@ -1292,17 +1305,17 @@ export function App() {
       return;
     }
 
-    // Check mail.com batch authorization
-    const hasMailCom = accounts.some((acc) => isMailComRelatedEmail(acc.email) || acc.provider === 'mailcom');
+    // Check RPA (Mail.com / OffiLive) batch authorization
+    const hasRpa = accounts.some((acc) => isRpaRelatedEmail(acc.email) || acc.provider === 'mailcom' || acc.provider === 'offilive');
     const hasTokenAccess = Boolean(accessToken && (!tokenInfo || tokenInfo.valid !== false));
 
-    if (accounts.length > 1 && hasMailCom && !hasTokenAccess) {
-      notify('error', '批量导入不支持mail.com邮箱，请使用单账号添加功能');
+    if (accounts.length > 1 && hasRpa && !hasTokenAccess) {
+      notify('error', '批量导入包含 Web RPA 邮箱（Mail.com / OffiLive），请先配置并验证授权 Token。');
       return;
     }
 
-    // Check token quota if Mail.com is requested
-    if (hasMailCom && accessToken && tokenInfo && tokenInfo.remainingQuota <= 0) {
+    // Check token quota if RPA is requested
+    if (hasRpa && accessToken && tokenInfo && tokenInfo.remainingQuota <= 0) {
       notify('error', '当前 Token 额度已耗尽，请联系管理员充值后再使用。');
       return;
     }

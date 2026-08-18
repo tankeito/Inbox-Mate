@@ -20,8 +20,15 @@ import { accessTokenService } from './services/access-token-service.js';
 
 const ACCOUNT_TIMEOUT_MS = 30_000;
 const RPA_ACCOUNT_TIMEOUT_MS = 90_000;
+const OFFILIVE_RPA_ACCOUNT_TIMEOUT_MS = 285_000;
 const JOB_TIMEOUT_MS = 300_000;
 const JOB_RETENTION_MS = 10 * 60_000;
+
+export function resolveRpaAccountTimeoutMs(provider: ProviderId, configuredTimeoutMs: number): number {
+  return provider === 'offilive'
+    ? Math.max(configuredTimeoutMs, OFFILIVE_RPA_ACCOUNT_TIMEOUT_MS)
+    : configuredTimeoutMs;
+}
 
 interface AccountRuntime {
   input?: AccountInput;
@@ -78,22 +85,50 @@ function cloneAccount(account: AccountSnapshot): AccountSnapshot {
   };
 }
 
+import { systemSettingsService, type SystemConcurrencySettings } from './services/system-settings-service.js';
+
 export class JobManager {
   private readonly jobs = new Map<string, JobRuntime>();
-  private readonly globalLimit = pLimit(50);
-  private readonly rpaLimit = pLimit(3);
+  private globalLimit: ReturnType<typeof pLimit>;
+  private rpaLimit: ReturnType<typeof pLimit>;
+  private providerLimitVal: number;
   private readonly providerLimits = new Map<string, ReturnType<typeof pLimit>>();
+  private accountTimeoutMs: number;
+  private rpaTimeoutMs: number;
+  private jobTimeoutMs: number;
 
   private getProviderLimit(provider: string): ReturnType<typeof pLimit> {
     let limit = this.providerLimits.get(provider);
     if (!limit) {
-      limit = pLimit(10);
+      limit = pLimit(this.providerLimitVal);
       this.providerLimits.set(provider, limit);
     }
     return limit;
   }
 
-  constructor(private readonly runAccount: JobAccountRunner) {}
+  constructor(private readonly runAccount: JobAccountRunner) {
+    const settings = systemSettingsService.getSettings();
+    this.globalLimit = pLimit(settings.concurrencyGlobalMax);
+    this.rpaLimit = pLimit(settings.concurrencyRpaMax);
+    this.providerLimitVal = settings.concurrencyProviderMax;
+    this.accountTimeoutMs = settings.timeoutAccountSec * 1000;
+    this.rpaTimeoutMs = settings.timeoutRpaSec * 1000;
+    this.jobTimeoutMs = settings.timeoutJobSec * 1000;
+
+    systemSettingsService.onSettingsChanged((newSettings) => {
+      this.applySettings(newSettings);
+    });
+  }
+
+  applySettings(settings: SystemConcurrencySettings): void {
+    this.globalLimit = pLimit(settings.concurrencyGlobalMax);
+    this.rpaLimit = pLimit(settings.concurrencyRpaMax);
+    this.providerLimitVal = settings.concurrencyProviderMax;
+    this.providerLimits.clear();
+    this.accountTimeoutMs = settings.timeoutAccountSec * 1000;
+    this.rpaTimeoutMs = settings.timeoutRpaSec * 1000;
+    this.jobTimeoutMs = settings.timeoutJobSec * 1000;
+  }
 
   create(input: CreateJobInput, meta?: { clientIp?: string; region?: string; token?: string }): JobSnapshot {
     for (const [id, job] of this.jobs.entries()) {
@@ -182,7 +217,7 @@ export class JobManager {
     if (job.controller.signal.aborted) return this.finishCancelled(job);
     job.state = 'running';
     job.updatedAt = new Date();
-    const jobTimeout = setTimeout(() => job.controller.abort(), JOB_TIMEOUT_MS);
+    const jobTimeout = setTimeout(() => job.controller.abort(), this.jobTimeoutMs);
     jobTimeout.unref();
 
     try {
@@ -191,11 +226,12 @@ export class JobManager {
           if (!account.input) return Promise.resolve();
           const engineType = routeAccountEngine(account.input);
           if (engineType === 'web_rpa') {
-            return this.rpaLimit(() => this.executeAccount(job, account, input, RPA_ACCOUNT_TIMEOUT_MS));
+            const timeoutMs = resolveRpaAccountTimeoutMs(account.input.provider, this.rpaTimeoutMs);
+            return this.rpaLimit(() => this.executeAccount(job, account, input, timeoutMs));
           }
           const provider = account.snapshot.provider;
           const limit = this.getProviderLimit(provider);
-          return this.globalLimit(() => limit(() => this.executeAccount(job, account, input, ACCOUNT_TIMEOUT_MS)));
+          return this.globalLimit(() => limit(() => this.executeAccount(job, account, input, this.accountTimeoutMs)));
         })
       );
       if (job.controller.signal.aborted) {

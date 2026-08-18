@@ -1,24 +1,9 @@
 import { z } from 'zod';
 import { InboxMateError } from './errors.js';
-import { normalizeEmail, providerForEmail, PROVIDER_REGISTRY } from './providers.js';
-import type { AccountInput, CreateJobInput, ProviderId } from '../shared/types.js';
+import { normalizeEmail, providerForEmail, PROVIDER_REGISTRY, isMailComDomain, isOffiLiveDomain } from './providers.js';
+import { PROVIDER_IDS, type AccountInput, type CreateJobInput, type ProviderId } from '../shared/types.js';
 
-const providerSchema = z.enum([
-  'microsoft',
-  'gmx',
-  'rambler',
-  'mailru',
-  'mailcom',
-  'yahoo',
-  'gmail',
-  'netease163',
-  'qq',
-  'icloud',
-  'zoho',
-  'fastmail',
-  'aol',
-  'custom'
-]);
+const providerSchema = z.enum(PROVIDER_IDS);
 const clientAccountIdSchema = z.string().min(1).max(128);
 
 const accountSchema = z
@@ -87,19 +72,19 @@ export function parseCreateJobInput(body: unknown): CreateJobInput {
     throw new InboxMateError('BAD_REQUEST', 400, '队列中没有有效的邮箱账户');
   }
 
-  // Check Mail.com batch prohibition (unless authorized with token)
+  // Check Web RPA (Mail.com / OffiLive) batch authorization
   if (accounts.length > 1) {
-    const hasMailCom = accounts.some((acc) => {
+    const hasRpa = accounts.some((acc) => {
       const domain = acc.email.split('@')[1]?.toLowerCase() || '';
       return (
         acc.provider === 'mailcom' ||
-        domain.endsWith('mail.com') ||
-        domain.endsWith('cheerful.com') ||
-        (PROVIDER_REGISTRY.mailcom.domains as readonly string[]).includes(domain)
+        acc.provider === 'offilive' ||
+        isMailComDomain(domain) ||
+        isOffiLiveDomain(domain)
       );
     });
-    if (hasMailCom && !result.data.token) {
-      throw new InboxMateError('BAD_REQUEST', 400, '批量导入不支持mail.com邮箱，请使用单账号添加功能');
+    if (hasRpa && !result.data.token) {
+      throw new InboxMateError('BAD_REQUEST', 400, '批量并发包含 Web RPA 邮箱（Mail.com / OffiLive），需要授权 Token。');
     }
   }
 

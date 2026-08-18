@@ -266,13 +266,13 @@ class IpBlockService {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    // Query aggregated logs grouped by client_ip
+    // Query aggregated logs grouped by client_ip (status IN ('success', 'no_code') are normal successful fetches)
     const ipRows = db.prepare(`
       SELECT
         client_ip,
         region,
         COUNT(*) as total_count,
-        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count,
+        SUM(CASE WHEN status IN ('success', 'no_code') THEN 1 ELSE 0 END) as success_count,
         MAX(created_at) as last_seen
       FROM usage_logs
       ${whereClause}

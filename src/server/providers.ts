@@ -15,13 +15,14 @@ const MICROSOFT_DOMAINS = [
   'hotmail.com',
   'live.com',
   'msn.com',
-  'offilive.com',
   'outlook.de',
   'outlook.jp',
   'outlook.co.uk',
   'hotmail.co.uk',
   'hotmail.de'
 ] as const;
+
+export const OFFILIVE_DOMAINS = ['offilive.com', 'offidocs.com', 'onworks.net'] as const;
 
 const GMX_DOMAINS = ['gmx.com', 'gmx.net', 'gmx.de', 'gmx.at', 'gmx.ch', 'gmx.fr', 'gmx.co.uk', 'gmx.us', 'gmx.info'] as const;
 const RAMBLER_DOMAINS = ['rambler.ru', 'myrambler.ru', 'ro.ru', 'lenta.ru', 'autorambler.ru'] as const;
@@ -245,6 +246,15 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderProfile> = {
     auth: 'app_password',
     engineType: 'web_rpa'
   },
+  offilive: {
+    id: 'offilive',
+    label: 'OffiLive',
+    host: 'www.offidocs.com',
+    port: 443,
+    domains: OFFILIVE_DOMAINS,
+    auth: 'app_password',
+    engineType: 'web_rpa'
+  },
   yahoo: {
     id: 'yahoo',
     label: 'Yahoo',
@@ -349,12 +359,32 @@ export function isMailComDomain(domain?: string): boolean {
   );
 }
 
+export function isOffiLiveDomain(domain?: string): boolean {
+  if (!domain) return false;
+  const d = domain.trim().toLowerCase();
+  return (
+    (OFFILIVE_DOMAINS as readonly string[]).includes(d) ||
+    d === 'offilive.com' ||
+    d.endsWith('.offilive.com') ||
+    d === 'offidocs.com' ||
+    d.endsWith('.offidocs.com') ||
+    d === 'onworks.net' ||
+    d.endsWith('.onworks.net')
+  );
+}
+
 export function autoDetectCustomProvider(email: string): ProviderProfile {
   const domain = domainFromEmail(email) || 'custom.com';
   const isMailCom = isMailComDomain(domain);
   if (isMailCom) {
     return {
       ...PROVIDER_REGISTRY.mailcom,
+      domains: [domain]
+    };
+  }
+  if (isOffiLiveDomain(domain)) {
+    return {
+      ...PROVIDER_REGISTRY.offilive,
       domains: [domain]
     };
   }
@@ -375,6 +405,12 @@ export function providerForEmail(email: string): ProviderProfile {
   if (isMailComDomain(domain)) {
     return {
       ...PROVIDER_REGISTRY.mailcom,
+      domains: [domain]
+    };
+  }
+  if (isOffiLiveDomain(domain)) {
+    return {
+      ...PROVIDER_REGISTRY.offilive,
       domains: [domain]
     };
   }

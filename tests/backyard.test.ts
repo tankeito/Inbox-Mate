@@ -4,10 +4,21 @@ import { adminAuthService } from '../src/server/auth/admin-auth.js';
 import { generateBase32Secret, generateTotp, verifyTotp, generateOtpAuthUri } from '../src/server/auth/totp.js';
 import { usageLogger } from '../src/server/services/usage-logger.js';
 import { diagLogger } from '../src/server/services/diag-logger.js';
-import { apiKeyService, encryptSecret, decryptSecret } from '../src/server/services/api-key-service.js';
+import {
+  apiKeyService,
+  encryptSecret,
+  decryptSecret,
+  resolveApiKeyFetchTimeoutMs
+} from '../src/server/services/api-key-service.js';
 import { accessTokenService } from '../src/server/services/access-token-service.js';
 
 describe('Backyard Management & API Engine', () => {
+  it('allows OffiLive API Key fetches to use the full RPA timeout', () => {
+    expect(resolveApiKeyFetchTimeoutMs('offilive')).toBe(285_000);
+    expect(resolveApiKeyFetchTimeoutMs('mailcom')).toBe(60_000);
+    expect(resolveApiKeyFetchTimeoutMs('gmx')).toBe(60_000);
+  });
+
   describe('TOTP 2FA Engine', () => {
     it('generates valid base32 secrets', () => {
       const secret = generateBase32Secret(20);
@@ -273,6 +284,18 @@ describe('Backyard Management & API Engine', () => {
       expect(typeof status.maxRecycleUsage).toBe('number');
       expect(status.maxRecycleUsage).toBe(30);
       expect(status.proxyInfo).toBeDefined();
+    });
+  });
+
+  describe('System Settings & Hardware Tuner Service', () => {
+    it('provides full payload including hardware, recommendations, and settings', async () => {
+      const { systemSettingsService } = await import('../src/server/services/system-settings-service.js');
+      const payload = systemSettingsService.getFullPayload();
+      expect(payload).toBeDefined();
+      expect(payload.hardware).toBeDefined();
+      expect(payload.recommendations).toBeDefined();
+      expect(payload.currentSettings).toBeDefined();
+      expect(payload.recommendations.rpaConcurrency).toBeGreaterThanOrEqual(1);
     });
   });
 });

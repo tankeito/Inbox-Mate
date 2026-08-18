@@ -4,6 +4,7 @@ export const PROVIDER_IDS = [
   'rambler',
   'mailru',
   'mailcom',
+  'offilive',
   'yahoo',
   'gmail',
   'netease163',

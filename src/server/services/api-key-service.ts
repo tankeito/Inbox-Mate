@@ -7,6 +7,14 @@ import { fetchAccountVerificationCode } from '../imap-client.js';
 import { usageLogger } from './usage-logger.js';
 import { diagLogger } from './diag-logger.js';
 import { accessTokenService } from './access-token-service.js';
+import { systemSettingsService } from './system-settings-service.js';
+
+const API_KEY_FETCH_TIMEOUT_MS = 60_000;
+const OFFILIVE_API_KEY_FETCH_TIMEOUT_MS = 285_000;
+
+export function resolveApiKeyFetchTimeoutMs(provider: ProviderId): number {
+  return provider === 'offilive' ? OFFILIVE_API_KEY_FETCH_TIMEOUT_MS : API_KEY_FETCH_TIMEOUT_MS;
+}
 
 // Master key for encrypting credentials at rest
 function getMasterKey(): Buffer {
@@ -517,8 +525,8 @@ export class ApiKeyService {
     if (activeTokenStr) {
       const check = accessTokenService.verifyTokenAccess(activeTokenStr);
       if (!check.valid) {
-        // If mailcom, strictly require valid token
-        if (row.provider === 'mailcom') {
+        // If mailcom or offilive, strictly require valid token
+        if (row.provider === 'mailcom' || row.provider === 'offilive') {
           throw new Error(check.reason || '关联的授权 Token 额度已用尽或已被冻结');
         }
       } else {
@@ -527,8 +535,9 @@ export class ApiKeyService {
     }
 
     // Anti-hammering cooldown cache check
+    const cooldownMs = systemSettingsService.getSettings().apiCooldownMs;
     const cachedEntry = apiKeyCooldownCache.get(apiKey);
-    if (cachedEntry && Date.now() - cachedEntry.timestamp < API_COOLDOWN_MS) {
+    if (cachedEntry && Date.now() - cachedEntry.timestamp < cooldownMs) {
       return {
         ...cachedEntry.result,
         cached: true,
@@ -568,7 +577,7 @@ export class ApiKeyService {
 
     const traceId = randomUUID();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60_000);
+    const timeout = setTimeout(() => controller.abort(), resolveApiKeyFetchTimeoutMs(provider));
 
     diagLogger.info('api', '接收请求', `收到 API Key 邮件拉取请求 (${email})`, { apiKey, clientIp: options.clientIp, traceId }, email, traceId);
 
@@ -595,10 +604,10 @@ export class ApiKeyService {
       const nowIso = new Date().toISOString();
       db.prepare('UPDATE api_keys SET call_count = call_count + 1, last_used_at = ? WHERE id = ?').run(nowIso, row.id);
 
-      // Post-execution quota deduction (Only consume on Mail.com RPA success)
+      // Post-execution quota deduction (Only consume on Web RPA success)
       let tokenInfoPayload: any = undefined;
       if (verifiedToken) {
-        if (provider === 'mailcom') {
+        if (provider === 'mailcom' || provider === 'offilive') {
           accessTokenService.consumeQuota(verifiedToken.id);
           tokenInfoPayload = {
             name: verifiedToken.name,

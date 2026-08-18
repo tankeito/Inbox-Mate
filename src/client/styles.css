@@ -2764,6 +2764,12 @@ input:focus, select:focus {
   color: #059669;
 }
 
+.provider-pill.provider-offilive {
+  background: rgba(0, 152, 204, 0.1);
+  border-color: rgba(0, 152, 204, 0.3);
+  color: #0098cc;
+}
+
 .provider-pill.provider-custom {
   background: rgba(245, 158, 11, 0.1);
   border-color: rgba(245, 158, 11, 0.25);

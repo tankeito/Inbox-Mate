@@ -176,6 +176,42 @@ export interface TokenSummaryStats {
   totalQuotaRemaining: number;
 }
 
+export interface SystemConcurrencySettings {
+  concurrencyRpaMax: number;
+  concurrencyProviderMax: number;
+  concurrencyGlobalMax: number;
+  timeoutAccountSec: number;
+  timeoutRpaSec: number;
+  timeoutJobSec: number;
+  apiCooldownMs: number;
+}
+
+export interface SystemHardwareInfo {
+  totalMemMb: number;
+  freeMemMb: number;
+  memUsagePercent: number;
+  cpuCount: number;
+  cpuModel: string;
+  loadAvg: number[];
+  processMemoryMb: number;
+  platform: string;
+}
+
+export interface SystemRecommendations {
+  rpaConcurrency: number;
+  globalConcurrency: number;
+  providerConcurrency: number;
+  healthStatus: 'tight' | 'healthy' | 'robust' | 'ultra';
+  healthMessage: string;
+  estimatedRpaMemoryPerInstanceMb: number;
+}
+
+export interface SystemSettingsPayload {
+  hardware: SystemHardwareInfo;
+  recommendations: SystemRecommendations;
+  currentSettings: SystemConcurrencySettings;
+}
+
 export interface TokenLogsResponse {
   token: AccessTokenItem;
   items: UsageLogItem[];
@@ -184,5 +220,3 @@ export interface TokenLogsResponse {
   pageSize: number;
   totalPages: number;
 }
-
-

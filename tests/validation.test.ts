@@ -66,7 +66,24 @@ describe('parseCreateJobInput', () => {
     ).toThrowError(/授权/);
   });
 
-  it('rejects batch processing (>1 account) when Mail.com / Cheerful account is included without token', () => {
+  it('accepts OffiLive account kristiannegraleski67@offilive.com', () => {
+    const input = {
+      ...base,
+      accounts: [
+        {
+          clientAccountId: 'account-offilive',
+          email: 'kristiannegraleski67@offilive.com',
+          provider: 'offilive',
+          auth: { type: 'app_password', secret: 'test-offilive-password' }
+        }
+      ]
+    };
+    const parsed = parseCreateJobInput(input);
+    expect(parsed.accounts[0].email).toBe('kristiannegraleski67@offilive.com');
+    expect(parsed.accounts[0].provider).toBe('offilive');
+  });
+
+  it('rejects batch processing (>1 account) when RPA account is included WITHOUT token', () => {
     const batchWithMailCom = {
       ...base,
       accounts: [
@@ -78,16 +95,16 @@ describe('parseCreateJobInput', () => {
         },
         {
           clientAccountId: 'account-2',
-          email: 'rozella.hermann@cheerful.com',
-          provider: 'mailcom',
+          email: 'kristian@offilive.com',
+          provider: 'offilive',
           auth: { type: 'app_password', secret: 'pass2' }
         }
       ]
     };
-    expect(() => parseCreateJobInput(batchWithMailCom)).toThrowError(/批量导入不支持mail.com/);
+    expect(() => parseCreateJobInput(batchWithMailCom)).toThrowError(/Web RPA/);
   });
 
-  it('allows batch processing (>1 account) when Mail.com account is included WITH token', () => {
+  it('allows batch processing (>1 account) when RPA account is included WITH token', () => {
     const batchWithToken = {
       ...base,
       token: 'tok_valid_token_123',
@@ -100,8 +117,8 @@ describe('parseCreateJobInput', () => {
         },
         {
           clientAccountId: 'account-2',
-          email: 'rozella.hermann@cheerful.com',
-          provider: 'mailcom',
+          email: 'kristian@offilive.com',
+          provider: 'offilive',
           auth: { type: 'app_password', secret: 'pass2' }
         }
       ]

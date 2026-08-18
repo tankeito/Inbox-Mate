@@ -54,10 +54,10 @@ class DatabaseService {
   }
 
   private initPragmas() {
+    this.db.exec('PRAGMA busy_timeout = 10000;');
     this.db.exec('PRAGMA journal_mode = WAL;');
     this.db.exec('PRAGMA synchronous = NORMAL;');
     this.db.exec('PRAGMA foreign_keys = ON;');
-    this.db.exec('PRAGMA busy_timeout = 5000;');
   }
 
   private initTables() {

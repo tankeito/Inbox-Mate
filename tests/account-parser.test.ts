@@ -103,6 +103,26 @@ describe('parseAccountText', () => {
     });
   });
 
+  it('parses OffiLive account kristiannegraleski67@offilive.com:MySecretPass', () => {
+    const line = 'kristiannegraleski67@offilive.com:MySecretPass';
+    const parsed = parseAccountLineSmart(line);
+    expect(parsed).not.toBeNull();
+    expect(parsed).toMatchObject({
+      email: 'kristiannegraleski67@offilive.com',
+      secret: 'MySecretPass',
+      provider: 'offilive',
+    });
+
+    const labeledLine = '账号: user1@offilive.com | 密码: passOffiLive123';
+    const parsedLabeled = parseAccountLineSmart(labeledLine);
+    expect(parsedLabeled).not.toBeNull();
+    expect(parsedLabeled).toMatchObject({
+      email: 'user1@offilive.com',
+      secret: 'passOffiLive123',
+      provider: 'offilive',
+    });
+  });
+
   it('correctly calculates statistics in parseAccountTextSmart', () => {
     const text = `
     【账号: a@rambler.ru | 密码: p1】

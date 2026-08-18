@@ -9,7 +9,9 @@ import type {
   UsageLogItem,
   AccessTokenItem,
   TokenSummaryStats,
-  TokenLogsResponse
+  TokenLogsResponse,
+  SystemSettingsPayload,
+  SystemConcurrencySettings
 } from './types';
 
 const BASE_URL = '/api/backyard';
@@ -353,5 +355,23 @@ export const backyardApi = {
     if (params?.startDate) searchParams.set('startDate', params.startDate);
     if (params?.endDate) searchParams.set('endDate', params.endDate);
     return request<TokenLogsResponse>(`/tokens/${id}/logs?${searchParams.toString()}`);
+  },
+
+  // System Concurrency & Hardware Tuning Settings
+  async getSystemSettings() {
+    return request<SystemSettingsPayload>('/settings/system');
+  },
+
+  async updateSystemSettings(payload: Partial<SystemConcurrencySettings>) {
+    return request<{ ok: boolean; message: string; settings: SystemConcurrencySettings; payload: SystemSettingsPayload }>('/settings/system', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async resetSystemSettings() {
+    return request<{ ok: boolean; message: string; settings: SystemConcurrencySettings; payload: SystemSettingsPayload }>('/settings/system/reset', {
+      method: 'POST'
+    });
   }
 };

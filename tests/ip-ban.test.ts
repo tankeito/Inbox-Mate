@@ -90,6 +90,33 @@ describe('IP Ban & TTL Auto-Unban Service', () => {
     expect(analytics.countryList).toBeDefined();
     expect(analytics.worldMapData).toBeDefined();
   });
+
+  it('should accurately calculate successRate including normal no_code polling status', () => {
+    const testAnalyticsIp = '203.0.113.88';
+    db.prepare('DELETE FROM usage_logs WHERE client_ip = ?').run(testAnalyticsIp);
+
+    // Insert 2 'success', 2 'no_code', 1 'error'
+    const insertLog = (status: string) => {
+      db.prepare(`
+        INSERT INTO usage_logs (id, client_ip, region, email_account, email_domain, provider, source_mode, status, has_code, duration_ms, message_count, created_at)
+        VALUES (?, ?, '中国 江苏 南京', 'test@mail.com', 'mail.com', 'mailcom', 'api_key', ?, 0, 1500, 2, datetime('now'))
+      `).run(`log_test_${Math.random()}`, testAnalyticsIp, status);
+    };
+
+    insertLog('success');
+    insertLog('success');
+    insertLog('no_code');
+    insertLog('no_code');
+    insertLog('error');
+
+    const analytics = ipBlockService.getIpAnalytics();
+    const item = analytics.ipList.find((i) => i.ip === testAnalyticsIp);
+
+    expect(item).toBeDefined();
+    expect(item?.requestCount).toBe(5);
+    expect(item?.successCount).toBe(4); // 2 success + 2 no_code = 4
+    expect(item?.successRate).toBe(80); // 4 / 5 = 80%
+  });
 });
 
 describe('Date Formatter & Presets Compatibility', () => {

@@ -61,7 +61,9 @@ export const UsageLogsView: React.FC = () => {
   const [detailTraces, setDetailTraces] = useState<DiagLogItem[]>([]);
   const [loadingTraces, setLoadingTraces] = useState(false);
   const [copiedJson, setCopiedJson] = useState(false);
-  const [expandedTraceId, setExpandedTraceId] = useState<string | null>(null);
+  const [expandedTraceIds, setExpandedTraceIds] = useState<Set<string>>(new Set());
+  const [traceFilter, setTraceFilter] = useState<'all' | 'milestones' | 'errors'>('all');
+  const [copiedTraceText, setCopiedTraceText] = useState(false);
   const [previewScreenshot, setPreviewScreenshot] = useState<string | null>(null);
   const [copiedReport, setCopiedReport] = useState(false);
 
@@ -140,7 +142,8 @@ export const UsageLogsView: React.FC = () => {
     setSelectedLog(item);
     setLoadingTraces(true);
     setCopiedJson(false);
-    setExpandedTraceId(null);
+    setExpandedTraceIds(new Set());
+    setTraceFilter('all');
     setPreviewScreenshot(null);
     setCopiedReport(false);
     try {
@@ -428,6 +431,7 @@ export const UsageLogsView: React.FC = () => {
             <select className="by-select" value={provider} onChange={(e) => { setProvider(e.target.value); setPage(1); }}>
               <option value="all">全部邮箱服务商</option>
               <option value="mailcom">Mail.com (Web RPA)</option>
+              <option value="offilive">OffiLive (Web RPA)</option>
               <option value="microsoft">Microsoft Outlook</option>
               <option value="gmx">GMX</option>
               <option value="rambler">Rambler</option>
@@ -516,7 +520,7 @@ export const UsageLogsView: React.FC = () => {
 
                     <td data-label="服务商">
                       <span style={{ textTransform: 'capitalize', color: 'var(--by-text-secondary)', fontSize: '0.82rem' }}>
-                        {item.provider === 'mailcom' ? 'Mail.com' : item.provider}
+                        {item.provider === 'mailcom' ? 'Mail.com' : item.provider === 'offilive' ? 'OffiLive' : item.provider}
                       </span>
                     </td>
 
@@ -692,7 +696,7 @@ export const UsageLogsView: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="by-detail-cell" title={selectedLog.provider === 'mailcom' ? 'Mail.com 集团 (Chrome RPA 引擎)' : selectedLog.provider}>
+                  <div className="by-detail-cell" title={selectedLog.provider === 'mailcom' ? 'Mail.com 集团 (Chrome RPA 引擎)' : selectedLog.provider === 'offilive' ? 'OffiLive (Chrome RPA 引擎)' : selectedLog.provider}>
                     <span className="by-detail-label">服务商协议 & 引擎</span>
                     <span
                       className="by-detail-value"
@@ -703,7 +707,7 @@ export const UsageLogsView: React.FC = () => {
                         textOverflow: 'ellipsis'
                       }}
                     >
-                      {selectedLog.provider === 'mailcom' ? 'Mail.com (Chrome RPA)' : selectedLog.provider}
+                      {selectedLog.provider === 'mailcom' ? 'Mail.com (Chrome RPA)' : selectedLog.provider === 'offilive' ? 'OffiLive (Chrome RPA)' : selectedLog.provider}
                     </span>
                     <span
                       style={{
@@ -843,7 +847,7 @@ export const UsageLogsView: React.FC = () => {
                   </div>
                 )}
 
-                {/* Step-by-Step Diagnostic Trace Log */}
+                {/* Step-by-Step Diagnostic Trace Log (Modern Observability Waterfall) */}
                 <div style={{ marginBottom: '16px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                     <div style={{ fontSize: '0.86rem', fontWeight: 600, color: 'var(--by-text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -856,80 +860,177 @@ export const UsageLogsView: React.FC = () => {
                   </div>
 
                   {loadingTraces ? (
-                    <div style={{ textAlign: 'center', padding: '24px', color: 'var(--by-text-secondary)' }}>
+                    <div style={{ textAlign: 'center', padding: '24px', color: 'var(--by-text-secondary)', background: 'var(--by-bg-input)', borderRadius: '8px', border: '1px solid var(--by-border)' }}>
                       <RefreshCw size={18} className="animate-spin" style={{ margin: '0 auto 6px auto' }} />
                       正在载入该请求的诊断日志...
                     </div>
                   ) : detailTraces.length > 0 ? (
-                    <div className="by-trace-timeline">
-                      {detailTraces.map((trace) => {
-                        const isExpanded = expandedTraceId === trace.id;
-                        let parsedMeta: any = null;
-                        if (trace.details) {
-                          try {
-                            parsedMeta = typeof trace.details === 'string' ? JSON.parse(trace.details) : trace.details;
-                          } catch {
-                            parsedMeta = { raw: trace.details };
-                          }
-                        }
-
-                        return (
-                          <div key={trace.id} className="by-trace-card">
-                            <div
-                              className="by-trace-card-header"
-                              onClick={() => setExpandedTraceId(isExpanded ? null : trace.id)}
+                    <div className="by-trace-box">
+                      {/* Trace Toolbar with Quick Filter Tabs & Action Controls */}
+                      <div className="by-trace-toolbar">
+                        <div className="by-trace-tabs">
+                          <button
+                            type="button"
+                            className={`by-trace-tab-btn ${traceFilter === 'all' ? 'active' : ''}`}
+                            onClick={() => setTraceFilter('all')}
+                          >
+                            全部 ({detailTraces.length})
+                          </button>
+                          <button
+                            type="button"
+                            className={`by-trace-tab-btn ${traceFilter === 'milestones' ? 'active' : ''}`}
+                            onClick={() => setTraceFilter('milestones')}
+                          >
+                            ⚡ 关键阶段 ({detailTraces.filter(t => !t.stage.startsWith('进度:')).length})
+                          </button>
+                          {detailTraces.some(t => t.level === 'WARN' || t.level === 'ERROR') && (
+                            <button
+                              type="button"
+                              className={`by-trace-tab-btn ${traceFilter === 'errors' ? 'active' : ''}`}
+                              onClick={() => setTraceFilter('errors')}
+                              style={{ color: 'var(--by-danger)' }}
                             >
-                              {trace.level === 'ERROR' ? (
-                                <AlertCircle size={15} color="var(--by-danger)" style={{ flexShrink: 0 }} />
-                              ) : trace.level === 'WARN' ? (
-                                <AlertCircle size={15} color="var(--by-warning)" style={{ flexShrink: 0 }} />
-                              ) : (
-                                <CheckCircle2 size={15} color="var(--by-success)" style={{ flexShrink: 0 }} />
-                              )}
+                              ⚠️ 异常 ({detailTraces.filter(t => t.level === 'WARN' || t.level === 'ERROR').length})
+                            </button>
+                          )}
+                        </div>
 
-                              <span style={{ fontSize: '0.72rem', color: 'var(--by-text-muted)', fontFamily: 'var(--by-font-mono)', whiteSpace: 'nowrap' }}>
-                                {new Date(trace.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
-                              </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <button
+                            type="button"
+                            className="by-btn by-btn-secondary by-btn-sm"
+                            onClick={() => {
+                              if (expandedTraceIds.size > 0) {
+                                setExpandedTraceIds(new Set());
+                              } else {
+                                const idsWithMeta = detailTraces.filter(t => !!t.details).map(t => t.id);
+                                setExpandedTraceIds(new Set(idsWithMeta));
+                              }
+                            }}
+                            style={{ padding: '2px 8px', fontSize: '0.72rem', height: '26px' }}
+                          >
+                            {expandedTraceIds.size > 0 ? '收起全部参数' : '展开全部参数'}
+                          </button>
 
-                              <span className={`by-badge ${trace.level === 'ERROR' ? 'by-badge-danger' : trace.level === 'WARN' ? 'by-badge-warning' : 'by-badge-info'}`} style={{ fontSize: '0.7rem' }}>
-                                {trace.stage}
-                              </span>
+                          <button
+                            type="button"
+                            className="by-btn by-btn-secondary by-btn-sm"
+                            onClick={() => {
+                              if (!detailTraces.length) return;
+                              const content = detailTraces.map((t, idx) => {
+                                const time = new Date(t.timestamp).toLocaleTimeString('zh-CN', { hour12: false });
+                                return `[#${idx + 1}] ${time} [${t.level}] [${t.stage}] ${t.message} ${t.details ? `\n    ${t.details}` : ''}`;
+                              }).join('\n');
+                              navigator.clipboard.writeText(content);
+                              setCopiedTraceText(true);
+                              setTimeout(() => setCopiedTraceText(false), 2000);
+                            }}
+                            style={{ padding: '2px 8px', fontSize: '0.72rem', height: '26px', color: copiedTraceText ? 'var(--by-success)' : undefined }}
+                          >
+                            {copiedTraceText ? <Check size={12} /> : <Copy size={12} />}
+                            <span>{copiedTraceText ? '已复制' : '复制轨迹'}</span>
+                          </button>
+                        </div>
+                      </div>
 
-                              <span style={{ color: trace.level === 'ERROR' ? 'var(--by-danger)' : 'var(--by-text-primary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {trace.message}
-                              </span>
+                      {/* Continuous Timeline Stream */}
+                      <div className="by-trace-stream">
+                        {detailTraces
+                          .filter((trace) => {
+                            if (traceFilter === 'milestones') return !trace.stage.startsWith('进度:');
+                            if (traceFilter === 'errors') return trace.level === 'WARN' || trace.level === 'ERROR';
+                            return true;
+                          })
+                          .map((trace) => {
+                            const isExpanded = expandedTraceIds.has(trace.id);
+                            const isProgress = trace.stage.startsWith('进度:');
+                            let parsedMeta: any = null;
+                            if (trace.details) {
+                              try {
+                                parsedMeta = typeof trace.details === 'string' ? JSON.parse(trace.details) : trace.details;
+                              } catch {
+                                parsedMeta = { raw: trace.details };
+                              }
+                            }
 
-                              {parsedMeta && (
-                                <button
-                                  type="button"
-                                  className="by-btn-icon"
-                                  style={{ padding: '2px', color: 'var(--by-text-muted)' }}
-                                  title={isExpanded ? '收起详情' : '展开参数详情'}
-                                >
-                                  {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                                </button>
-                              )}
-                            </div>
+                            return (
+                              <div
+                                key={trace.id}
+                                className="by-trace-item"
+                                onClick={() => {
+                                  if (!parsedMeta) return;
+                                  setExpandedTraceIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(trace.id)) next.delete(trace.id);
+                                    else next.add(trace.id);
+                                    return next;
+                                  });
+                                }}
+                              >
+                                {/* Timeline Node Icon */}
+                                <div className="by-trace-node-icon">
+                                  {trace.level === 'ERROR' ? (
+                                    <AlertCircle size={14} color="var(--by-danger)" />
+                                  ) : trace.level === 'WARN' ? (
+                                    <AlertCircle size={14} color="var(--by-warning)" />
+                                  ) : isProgress ? (
+                                    <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--by-primary)' }} />
+                                  ) : (
+                                    <CheckCircle2 size={14} color="var(--by-success)" />
+                                  )}
+                                </div>
 
-                            {/* Expandable Step Metadata Drawer */}
-                            {isExpanded && parsedMeta && (
-                              <div className="by-trace-meta-drawer">
-                                {Object.entries(parsedMeta).map(([k, v]) => {
-                                  if (k === 'screenshotBase64') return null; // Don't dump huge base64 in text view
-                                  return (
-                                    <div key={k} className="by-meta-row">
-                                      <span className="by-meta-key">{k}:</span>
-                                      <span className="by-meta-val">
-                                        {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+                                {/* Trace Content Row */}
+                                <div className="by-trace-content">
+                                  <span className="by-trace-time">
+                                    {new Date(trace.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
+                                  </span>
+
+                                  <span
+                                    className={`by-trace-stage-badge ${
+                                      trace.level === 'ERROR'
+                                        ? 'by-badge-danger'
+                                        : trace.level === 'WARN'
+                                        ? 'by-badge-warning'
+                                        : isProgress
+                                        ? 'by-badge-neutral'
+                                        : 'by-badge-info'
+                                    }`}
+                                  >
+                                    {trace.stage}
+                                  </span>
+
+                                  <div className="by-trace-msg" style={{ color: trace.level === 'ERROR' ? 'var(--by-danger)' : undefined }}>
+                                    <span>{trace.message}</span>
+                                    {parsedMeta && (
+                                      <span style={{ marginLeft: '8px', fontSize: '0.7rem', color: 'var(--by-text-muted)', display: 'inline-flex', alignItems: 'center', gap: '2px', cursor: 'pointer' }}>
+                                        {isExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                                        {isExpanded ? '收起' : '详情'}
                                       </span>
+                                    )}
+                                  </div>
+
+                                  {/* Expandable Inline Meta Drawer */}
+                                  {isExpanded && parsedMeta && (
+                                    <div className="by-trace-meta-inline" onClick={(e) => e.stopPropagation()}>
+                                      {Object.entries(parsedMeta).map(([k, v]) => {
+                                        if (k === 'screenshotBase64') return null; // Don't dump huge base64
+                                        return (
+                                          <div key={k} className="by-meta-row">
+                                            <span className="by-meta-key">{k}:</span>
+                                            <span className="by-meta-val">
+                                              {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+                                            </span>
+                                          </div>
+                                        );
+                                      })}
                                     </div>
-                                  );
-                                })}
+                                  )}
+                                </div>
                               </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                            );
+                          })}
+                      </div>
                     </div>
                   ) : (
                     <div style={{ padding: '16px', background: 'var(--by-bg-input)', border: '1px solid var(--by-border)', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--by-text-muted)', textAlign: 'center' }}>
