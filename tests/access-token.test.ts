@@ -145,18 +145,19 @@ describe('Access Token Service & Quota Management', () => {
     expect(formattedWithToken).toContain('API：https://example.com/api/im_testkey12345678?token=tok_mysecrettoken999');
   });
 
-  it('retrieves detailed usage consumption logs for a token', () => {
+  it('retrieves detailed usage consumption logs for a token with stats and status filtering', () => {
     const token = accessTokenService.createToken({
-      name: '日志测试Token',
+      name: '日志分类测试Token',
       totalQuota: 20
     });
 
+    // Record 1 success
     usageLogger.record({
       clientIp: '192.168.1.100',
       region: '北京市',
       emailAccount: 'tester1@mail.com',
       provider: 'mailcom',
-      sourceMode: 'single',
+      sourceMode: 'api_key',
       status: 'success',
       hasCode: true,
       extractedCode: '884821',
@@ -166,11 +167,43 @@ describe('Access Token Service & Quota Management', () => {
       token: token.token
     });
 
-    const logsResult = accessTokenService.getTokenLogs(token.id);
-    expect(logsResult).toBeDefined();
-    expect(logsResult.token.name).toBe('日志测试Token');
-    expect(logsResult.items.length).toBeGreaterThanOrEqual(1);
-    expect(logsResult.items[0].clientIp).toBe('192.168.1.100');
-    expect(logsResult.items[0].extractedCode).toBe('884821');
+    // Record 1 error
+    usageLogger.record({
+      clientIp: '192.168.1.101',
+      region: '上海市',
+      emailAccount: 'tester2@mail.com',
+      provider: 'mailcom',
+      sourceMode: 'api_key',
+      status: 'error',
+      statusDetail: '403 Blocked',
+      hasCode: false,
+      extractedCode: undefined,
+      durationMs: 4100,
+      messageCount: 0,
+      tokenId: token.id,
+      token: token.token
+    });
+
+    // Query all
+    const allLogs = accessTokenService.getTokenLogs(token.id, { status: 'all' });
+    expect(allLogs).toBeDefined();
+    expect(allLogs.total).toBe(2);
+    expect(allLogs.stats.totalCalls).toBe(2);
+    expect(allLogs.stats.successCalls).toBe(1);
+    expect(allLogs.stats.errorCalls).toBe(1);
+    expect(allLogs.stats.successRate).toBe(50);
+    expect(allLogs.stats.freeProtectionCount).toBe(1);
+
+    // Query success only
+    const successLogs = accessTokenService.getTokenLogs(token.id, { status: 'success' });
+    expect(successLogs.total).toBe(1);
+    expect(successLogs.items[0].status).toBe('success');
+    expect(successLogs.items[0].extractedCode).toBe('884821');
+
+    // Query error only
+    const errorLogs = accessTokenService.getTokenLogs(token.id, { status: 'error' });
+    expect(errorLogs.total).toBe(1);
+    expect(errorLogs.items[0].status).toBe('error');
+    expect(errorLogs.items[0].clientIp).toBe('192.168.1.101');
   });
 });

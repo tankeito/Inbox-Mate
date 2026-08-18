@@ -348,12 +348,13 @@ export const backyardApi = {
     });
   },
 
-  async getTokenLogs(id: string, params?: { page?: number; pageSize?: number; startDate?: string; endDate?: string }) {
+  async getTokenLogs(id: string, params?: { page?: number; pageSize?: number; startDate?: string; endDate?: string; status?: 'all' | 'success' | 'error' }) {
     const searchParams = new URLSearchParams();
     if (params?.page) searchParams.set('page', params.page.toString());
     if (params?.pageSize) searchParams.set('pageSize', params.pageSize.toString());
     if (params?.startDate) searchParams.set('startDate', params.startDate);
     if (params?.endDate) searchParams.set('endDate', params.endDate);
+    if (params?.status && params.status !== 'all') searchParams.set('status', params.status);
     return request<TokenLogsResponse>(`/tokens/${id}/logs?${searchParams.toString()}`);
   },
 

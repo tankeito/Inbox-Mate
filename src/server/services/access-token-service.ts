@@ -294,7 +294,13 @@ export class AccessTokenService {
    */
   getTokenLogs(
     idOrToken: string,
-    params?: { page?: number; pageSize?: number; startDate?: string; endDate?: string }
+    params?: {
+      page?: number;
+      pageSize?: number;
+      startDate?: string;
+      endDate?: string;
+      status?: 'all' | 'success' | 'error';
+    }
   ): {
     token: FormattedAccessToken;
     items: UsageLogItem[];
@@ -302,38 +308,72 @@ export class AccessTokenService {
     page: number;
     pageSize: number;
     totalPages: number;
+    stats: {
+      totalCalls: number;
+      successCalls: number;
+      errorCalls: number;
+      successRate: number;
+      freeProtectionCount: number;
+    };
   } {
     const token = this.getTokenById(idOrToken) || this.getTokenByString(idOrToken);
     if (!token) {
       throw new Error('Token 不存在或已被删除');
     }
 
-    const page = Math.max(1, params?.page || 1);
-    const pageSize = Math.max(1, Math.min(100, params?.pageSize || 20));
-    const offset = (page - 1) * pageSize;
-
-    const conditions: string[] = ['(token_id = ? OR token = ? OR token_id = ? OR token = ?)'];
-    const args: any[] = [token.id, token.token, token.token, token.id];
+    // 1. Overall stats across all logs for this token (unfiltered by status tab)
+    const baseConditions: string[] = ['(token_id = ? OR token = ? OR token_id = ? OR token = ?)'];
+    const baseArgs: any[] = [token.id, token.token, token.token, token.id];
 
     if (params?.startDate && params.startDate.trim()) {
       const s = params.startDate.trim();
       const startIso = s.includes('T') ? s : `${s}T00:00:00.000Z`;
-      conditions.push('created_at >= ?');
-      args.push(startIso);
+      baseConditions.push('created_at >= ?');
+      baseArgs.push(startIso);
     }
 
     if (params?.endDate && params.endDate.trim()) {
       const e = params.endDate.trim();
       const endIso = e.includes('T') ? e : `${e}T23:59:59.999Z`;
-      conditions.push('created_at <= ?');
-      args.push(endIso);
+      baseConditions.push('created_at <= ?');
+      baseArgs.push(endIso);
+    }
+
+    const baseWhereClause = `WHERE ${baseConditions.join(' AND ')}`;
+
+    const statsStmt = db.prepare(`
+      SELECT 
+        COUNT(*) as totalCalls,
+        SUM(CASE WHEN status = 'success' OR has_code = 1 THEN 1 ELSE 0 END) as successCalls,
+        SUM(CASE WHEN status != 'success' AND has_code = 0 THEN 1 ELSE 0 END) as errorCalls
+      FROM usage_logs ${baseWhereClause}
+    `);
+    const statsRes = statsStmt.get(...baseArgs) as any;
+    const totalCalls = statsRes ? Number(statsRes.totalCalls || 0) : 0;
+    const successCalls = statsRes ? Number(statsRes.successCalls || 0) : 0;
+    const errorCalls = statsRes ? Number(statsRes.errorCalls || 0) : 0;
+    const successRate = totalCalls > 0 ? Math.round((successCalls / totalCalls) * 1000) / 10 : 100;
+    const freeProtectionCount = errorCalls;
+
+    // 2. Filtered list query
+    const page = Math.max(1, params?.page || 1);
+    const pageSize = Math.max(1, Math.min(100, params?.pageSize || 10));
+    const offset = (page - 1) * pageSize;
+
+    const conditions: string[] = [...baseConditions];
+    const args: any[] = [...baseArgs];
+
+    if (params?.status === 'success') {
+      conditions.push("(status = 'success' OR has_code = 1)");
+    } else if (params?.status === 'error') {
+      conditions.push("(status != 'success' AND has_code = 0)");
     }
 
     const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
     const countStmt = db.prepare(`SELECT COUNT(*) as count FROM usage_logs ${whereClause}`);
     const countRes = countStmt.get(...args) as any;
-    let total = countRes ? countRes.count : 0;
+    const total = countRes ? Number(countRes.count || 0) : 0;
 
     const listStmt = db.prepare(`
       SELECT * FROM usage_logs
@@ -342,11 +382,6 @@ export class AccessTokenService {
       LIMIT ? OFFSET ?
     `);
     const rows = listStmt.all(...args, pageSize, offset) as any[];
-
-    // Auto-calibrate total and totalPages to actual data
-    if (page === 1 && rows.length < pageSize && total !== rows.length) {
-      total = rows.length;
-    }
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
     const items: UsageLogItem[] = rows.map((r) => ({
@@ -374,7 +409,14 @@ export class AccessTokenService {
       total,
       page,
       pageSize,
-      totalPages
+      totalPages,
+      stats: {
+        totalCalls,
+        successCalls,
+        errorCalls,
+        successRate,
+        freeProtectionCount
+      }
     };
   }
 }

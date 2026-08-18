@@ -545,11 +545,13 @@ export function createBackyardRouter(): express.Router {
     try {
       const id = firstParam(req.params.id);
       const page = Number.parseInt(req.query.page as string) || 1;
-      const pageSize = Number.parseInt(req.query.pageSize as string) || 20;
+      const pageSize = Number.parseInt(req.query.pageSize as string) || 10;
       const startDate = (req.query.startDate as string) || undefined;
       const endDate = (req.query.endDate as string) || undefined;
+      const statusParam = (req.query.status as string) || 'all';
+      const status = (statusParam === 'success' || statusParam === 'error') ? statusParam : 'all';
 
-      const result = accessTokenService.getTokenLogs(id, { page, pageSize, startDate, endDate });
+      const result = accessTokenService.getTokenLogs(id, { page, pageSize, startDate, endDate, status });
       res.json(result);
     } catch (err: any) {
       res.status(400).json({ error: err.message || '获取 Token 消耗日志失败' });

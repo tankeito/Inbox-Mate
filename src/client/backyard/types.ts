@@ -212,6 +212,14 @@ export interface SystemSettingsPayload {
   currentSettings: SystemConcurrencySettings;
 }
 
+export interface TokenLogsStats {
+  totalCalls: number;
+  successCalls: number;
+  errorCalls: number;
+  successRate: number;
+  freeProtectionCount: number;
+}
+
 export interface TokenLogsResponse {
   token: AccessTokenItem;
   items: UsageLogItem[];
@@ -219,4 +227,5 @@ export interface TokenLogsResponse {
   page: number;
   pageSize: number;
   totalPages: number;
+  stats?: TokenLogsStats;
 }

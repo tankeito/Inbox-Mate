@@ -21,10 +21,15 @@ import {
   FileText,
   History,
   Globe,
-  ExternalLink
+  ExternalLink,
+  Activity,
+  ShieldCheck,
+  CheckCircle,
+  XCircle,
+  ListFilter
 } from 'lucide-react';
 import { backyardApi } from '../api';
-import type { AccessTokenItem, TokenSummaryStats, UsageLogItem } from '../types';
+import type { AccessTokenItem, TokenSummaryStats, UsageLogItem, TokenLogsStats } from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { formatDuration, formatFullDateTime, type DatePreset } from '../../../shared/format-utils';
 import { DateRangeFilter } from '../components/DateRangeFilter';
@@ -66,12 +71,14 @@ export const TokensView: React.FC = () => {
   const [tokenLogs, setTokenLogs] = useState<UsageLogItem[]>([]);
   const [tokenLogsLoading, setTokenLogsLoading] = useState(false);
   const [tokenLogsPage, setTokenLogsPage] = useState(1);
-  const [tokenLogsPageSize, setTokenLogsPageSize] = useState(10);
+  const [tokenLogsPageSize, setTokenLogsPageSize] = useState(8);
   const [tokenLogsTotal, setTokenLogsTotal] = useState(0);
   const [tokenLogsTotalPages, setTokenLogsTotalPages] = useState(1);
   const [tokenLogsStartDate, setTokenLogsStartDate] = useState('');
   const [tokenLogsEndDate, setTokenLogsEndDate] = useState('');
   const [tokenLogsActivePreset, setTokenLogsActivePreset] = useState<DatePreset | 'custom' | null>(null);
+  const [tokenLogsStatusTab, setTokenLogsStatusTab] = useState<'all' | 'success' | 'error'>('all');
+  const [tokenLogsStats, setTokenLogsStats] = useState<TokenLogsStats | null>(null);
 
   const fetchTokens = async () => {
     try {
@@ -199,19 +206,28 @@ export const TokensView: React.FC = () => {
     }
   };
 
-  const handleOpenTokenLogs = async (item: AccessTokenItem, p = 1, size = tokenLogsPageSize) => {
+  const handleOpenTokenLogs = async (
+    item: AccessTokenItem,
+    p = 1,
+    size = tokenLogsPageSize,
+    tab: 'all' | 'success' | 'error' = tokenLogsStatusTab
+  ) => {
     setTokenForLogs(item);
     setTokenLogsPage(p);
     setTokenLogsPageSize(size);
+    setTokenLogsStatusTab(tab);
     setTokenLogsLoading(true);
     try {
-      const res = await backyardApi.getTokenLogs(item.id, { page: p, pageSize: size });
+      const res = await backyardApi.getTokenLogs(item.id, { page: p, pageSize: size, status: tab });
       if (res.token) {
         setTokenForLogs(res.token);
       }
       setTokenLogs(res.items);
       setTokenLogsTotal(res.total);
       setTokenLogsTotalPages(res.totalPages);
+      if (res.stats) {
+        setTokenLogsStats(res.stats);
+      }
     } catch (err: any) {
       console.error('Failed to fetch token logs:', err);
       setTokenLogs([]);
@@ -700,181 +716,335 @@ export const TokensView: React.FC = () => {
       {/* Token Consumption Logs Modal */}
       {tokenForLogs && (
         <div className="by-modal-overlay">
-          <div className="by-modal" style={{ maxWidth: '880px', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
-            <div className="by-modal-header">
-              <div className="by-modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <FileText size={18} color="var(--by-primary)" />
-                <span>【{tokenForLogs.name}】Token 消耗与审计记录</span>
+          <div className="by-modal" style={{ maxWidth: '1020px', width: '95vw', maxHeight: '96vh', minHeight: '640px', display: 'flex', flexDirection: 'column' }}>
+            <div className="by-modal-header" style={{ padding: '16px 24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{
+                  width: '36px',
+                  height: '36px',
+                  borderRadius: '8px',
+                  background: 'var(--by-primary-subtle)',
+                  color: 'var(--by-primary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <KeyRound size={18} />
+                </div>
+                <div>
+                  <div className="by-modal-title" style={{ fontSize: '1.08rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span>【{tokenForLogs.name}】Token 消耗与调用审计</span>
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--by-text-muted)', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span>密钥:</span>
+                    <code style={{ fontFamily: 'var(--by-font-mono)', fontWeight: 600, color: 'var(--by-text-code)' }}>{tokenForLogs.token}</code>
+                    <button
+                      type="button"
+                      className="by-btn-icon"
+                      style={{ padding: '1px 4px' }}
+                      onClick={() => handleCopy(tokenForLogs.token)}
+                      title="复制完整 Token"
+                    >
+                      {copiedToken === tokenForLogs.token ? <Check size={12} color="var(--by-success)" /> : <Copy size={12} />}
+                    </button>
+                  </div>
+                </div>
               </div>
               <button className="by-btn-icon" onClick={() => setTokenForLogs(null)}>
                 <X size={18} />
               </button>
             </div>
 
-            <div className="by-modal-body" style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* Token Info Card */}
+            <div className="by-modal-body" style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '14px', padding: '18px 24px' }}>
+              {/* Top 3-Card Summary Grid (Elegant & Spacious) */}
               <div style={{
-                padding: '14px 16px',
-                borderRadius: '10px',
-                background: 'var(--by-bg-input)',
-                border: '1px solid var(--by-border)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '10px'
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                gap: '12px'
               }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '0.82rem', color: 'var(--by-text-secondary)' }}>Token 密钥:</span>
-                    <code style={{ fontFamily: 'var(--by-font-mono)', fontWeight: 700, color: 'var(--by-text-code)', fontSize: '0.84rem' }}>
-                      {tokenForLogs.token}
-                    </code>
-                    <button
-                      type="button"
-                      className="by-btn-icon"
-                      style={{ padding: '2px 4px' }}
-                      onClick={() => handleCopy(tokenForLogs.token)}
-                      title="复制完整 Token"
-                    >
-                      {copiedToken === tokenForLogs.token ? <Check size={13} color="var(--by-success)" /> : <Copy size={13} />}
-                    </button>
-                  </div>
-
-                  <div>
+                {/* Card 1: 真实扣费额度 (与外层严格对齐) */}
+                <div style={{
+                  padding: '12px 16px',
+                  borderRadius: '8px',
+                  background: 'var(--by-bg-input)',
+                  border: '1px solid var(--by-border)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '7px'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--by-text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <KeyRound size={13} color="var(--by-primary)" /> Token 计费额度
+                    </span>
                     {!tokenForLogs.isActive ? (
-                      <span className="by-badge by-badge-danger" style={{ fontSize: '0.74rem' }}>已冻结</span>
+                      <span className="by-badge by-badge-danger" style={{ fontSize: '0.7rem', padding: '2px 6px' }}>已冻结</span>
                     ) : tokenForLogs.isExhausted ? (
-                      <span className="by-badge by-badge-warning" style={{ fontSize: '0.74rem' }}>已耗尽</span>
+                      <span className="by-badge by-badge-warning" style={{ fontSize: '0.7rem', padding: '2px 6px' }}>已耗尽</span>
                     ) : (
-                      <span className="by-badge by-badge-success" style={{ fontSize: '0.74rem' }}>正常可用</span>
+                      <span className="by-badge by-badge-success" style={{ fontSize: '0.7rem', padding: '2px 6px' }}>正常可用</span>
                     )}
                   </div>
+                  
+                  {(() => {
+                    const percent = Math.min(100, Math.round((tokenForLogs.usedQuota / tokenForLogs.totalQuota) * 100));
+                    return (
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '4px' }}>
+                          <span style={{ fontSize: '1.12rem', fontWeight: 700, color: 'var(--by-text-primary)' }}>
+                            已用 {tokenForLogs.usedQuota} <span style={{ fontSize: '0.8rem', fontWeight: 500, color: 'var(--by-text-muted)' }}>/ 共 {tokenForLogs.totalQuota} 次</span>
+                          </span>
+                          <span style={{ fontSize: '0.78rem' }}>
+                            剩余可用: <strong style={{ color: tokenForLogs.remainingQuota > 0 ? 'var(--by-success)' : 'var(--by-danger)' }}>{tokenForLogs.remainingQuota}</strong> 次
+                          </span>
+                        </div>
+                        <div style={{ height: '6px', background: 'var(--by-bg-card)', borderRadius: '3px', overflow: 'hidden' }}>
+                          <div
+                            style={{
+                              height: '100%',
+                              width: `${percent}%`,
+                              background: tokenForLogs.remainingQuota === 0 ? 'var(--by-danger)' : 'var(--by-primary)',
+                              transition: 'width 0.3s ease'
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  <div style={{ fontSize: '0.7rem', color: 'var(--by-text-muted)' }}>
+                    * 成功调用计费扣减，与外层表格严格统一
+                  </div>
                 </div>
 
-                {/* Progress bar */}
-                {(() => {
-                  const actualUsed = (tokenLogsTotal > 0 || tokenLogs.length > 0) ? tokenLogsTotal : tokenForLogs.usedQuota;
-                  const actualRemaining = Math.max(0, tokenForLogs.totalQuota - actualUsed);
-                  const percent = Math.min(100, Math.round((actualUsed / tokenForLogs.totalQuota) * 100));
-                  return (
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', marginBottom: '4px' }}>
-                        <span style={{ fontWeight: 600, color: 'var(--by-text-primary)' }}>
-                          已消费 {actualUsed} / 共 {tokenForLogs.totalQuota} 次
-                        </span>
-                        <span>
-                          剩余可用: <strong style={{ color: actualRemaining > 0 ? 'var(--by-success)' : 'var(--by-danger)' }}>{actualRemaining}</strong> 次
-                        </span>
-                      </div>
-                      <div style={{ height: '6px', background: 'var(--by-bg-card)', borderRadius: '3px', overflow: 'hidden' }}>
-                        <div
-                          style={{
-                            height: '100%',
-                            width: `${percent}%`,
-                            background: actualRemaining === 0 ? 'var(--by-danger)' : 'var(--by-primary)',
-                            transition: 'width 0.3s ease'
-                          }}
-                        />
-                      </div>
+                {/* Card 2: 审计总调用与状态分布 */}
+                <div style={{
+                  padding: '12px 16px',
+                  borderRadius: '8px',
+                  background: 'var(--by-bg-input)',
+                  border: '1px solid var(--by-border)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '7px'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--by-text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <Activity size={13} color="var(--by-info)" /> API 审计总流水
+                    </span>
+                    <span className="by-badge by-badge-info" style={{ fontSize: '0.7rem', padding: '2px 6px' }}>全量审计</span>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '1.12rem', fontWeight: 700, color: 'var(--by-text-primary)', marginBottom: '4px' }}>
+                      {tokenLogsStats?.totalCalls ?? tokenLogsTotal} <span style={{ fontSize: '0.8rem', fontWeight: 500, color: 'var(--by-text-muted)' }}>次请求流水</span>
                     </div>
-                  );
-                })()}
+                    <div style={{ fontSize: '0.78rem', color: 'var(--by-text-secondary)', display: 'flex', gap: '12px' }}>
+                      <span>成功: <strong style={{ color: 'var(--by-success)' }}>{tokenLogsStats?.successCalls ?? 0}</strong> 次</span>
+                      <span>异常: <strong style={{ color: 'var(--by-danger)' }}>{tokenLogsStats?.errorCalls ?? 0}</strong> 次</span>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--by-text-muted)' }}>
+                    包含客户端所有访问记录（含网络抖动/403/超时等）
+                  </div>
+                </div>
+
+                {/* Card 3: 成功率与免扣保护 */}
+                <div style={{
+                  padding: '12px 16px',
+                  borderRadius: '8px',
+                  background: 'var(--by-bg-input)',
+                  border: '1px solid var(--by-border)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '7px'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.78rem', color: 'var(--by-text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <ShieldCheck size={13} color="var(--by-success)" /> 接口成功率 & 计费保护
+                    </span>
+                    <span className="by-badge by-badge-success" style={{ fontSize: '0.7rem', padding: '2px 6px' }}>免扣保护中</span>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '1.12rem', fontWeight: 700, color: (tokenLogsStats?.successRate ?? 100) >= 80 ? 'var(--by-success)' : (tokenLogsStats?.successRate ?? 100) >= 50 ? 'var(--by-warning)' : 'var(--by-danger)', marginBottom: '4px' }}>
+                      {tokenLogsStats?.successRate ?? 100}% <span style={{ fontSize: '0.8rem', fontWeight: 500, color: 'var(--by-text-muted)' }}>成功率</span>
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--by-text-secondary)' }}>
+                      免扣保护: <strong style={{ color: 'var(--by-info)' }}>{tokenLogsStats?.freeProtectionCount ?? 0}</strong> 次异常未扣减额度
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--by-text-muted)' }}>
+                    🛡️ 遵循“成功扣费、失败免扣”，客户额度受保护
+                  </div>
+                </div>
               </div>
 
-              {/* Log Items Header */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ fontWeight: 600, fontSize: '0.92rem', color: 'var(--by-text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <History size={16} color="var(--by-text-secondary)" /> 详细调用消耗记录 ({tokenLogsTotal} 条)
+              {/* Tab Selector & Controls */}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '10px',
+                paddingTop: '2px'
+              }}>
+                {/* Segmented Status Tabs */}
+                <div style={{
+                  display: 'inline-flex',
+                  background: 'var(--by-bg-input)',
+                  padding: '3px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--by-border)'
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenTokenLogs(tokenForLogs, 1, tokenLogsPageSize, 'all')}
+                    style={{
+                      padding: '5px 14px',
+                      fontSize: '0.8rem',
+                      fontWeight: tokenLogsStatusTab === 'all' ? 700 : 500,
+                      borderRadius: '6px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: tokenLogsStatusTab === 'all' ? 'var(--by-bg-card)' : 'transparent',
+                      color: tokenLogsStatusTab === 'all' ? 'var(--by-text-primary)' : 'var(--by-text-secondary)',
+                      boxShadow: tokenLogsStatusTab === 'all' ? 'var(--by-shadow-sm)' : 'none',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    全部流水 ({tokenLogsStats?.totalCalls ?? tokenLogsTotal})
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleOpenTokenLogs(tokenForLogs, 1, tokenLogsPageSize, 'success')}
+                    style={{
+                      padding: '5px 14px',
+                      fontSize: '0.8rem',
+                      fontWeight: tokenLogsStatusTab === 'success' ? 700 : 500,
+                      borderRadius: '6px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: tokenLogsStatusTab === 'success' ? 'var(--by-bg-card)' : 'transparent',
+                      color: tokenLogsStatusTab === 'success' ? 'var(--by-success)' : 'var(--by-text-secondary)',
+                      boxShadow: tokenLogsStatusTab === 'success' ? 'var(--by-shadow-sm)' : 'none',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    ✓ 正常成功 ({tokenLogsStats?.successCalls ?? 0})
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleOpenTokenLogs(tokenForLogs, 1, tokenLogsPageSize, 'error')}
+                    style={{
+                      padding: '5px 14px',
+                      fontSize: '0.8rem',
+                      fontWeight: tokenLogsStatusTab === 'error' ? 700 : 500,
+                      borderRadius: '6px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: tokenLogsStatusTab === 'error' ? 'var(--by-bg-card)' : 'transparent',
+                      color: tokenLogsStatusTab === 'error' ? 'var(--by-danger)' : 'var(--by-text-secondary)',
+                      boxShadow: tokenLogsStatusTab === 'error' ? 'var(--by-shadow-sm)' : 'none',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    ✕ 异常/免扣 ({tokenLogsStats?.errorCalls ?? 0})
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  className="by-btn by-btn-secondary by-btn-sm"
-                  onClick={() => handleOpenTokenLogs(tokenForLogs, tokenLogsPage)}
-                  disabled={tokenLogsLoading}
-                >
-                  <RefreshCw size={13} className={tokenLogsLoading ? 'animate-spin' : ''} /> 刷新日志
-                </button>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button
+                    type="button"
+                    className="by-btn by-btn-secondary by-btn-sm"
+                    style={{ height: '28px', padding: '0 10px', fontSize: '0.78rem' }}
+                    onClick={() => handleOpenTokenLogs(tokenForLogs, tokenLogsPage, tokenLogsPageSize, tokenLogsStatusTab)}
+                    disabled={tokenLogsLoading}
+                  >
+                    <RefreshCw size={13} className={tokenLogsLoading ? 'animate-spin' : ''} /> 刷新当前
+                  </button>
+                </div>
               </div>
 
               {/* Log List / Table */}
               <div style={{ border: '1px solid var(--by-border)', borderRadius: '8px', overflow: 'hidden' }}>
-                <div className="by-table-wrapper">
-                  <table className="by-table" style={{ fontSize: '0.82rem' }}>
+                <div className="by-table-wrapper" style={{ border: 'none', borderRadius: 0 }}>
+                  <table className="by-table by-table-compact" style={{ fontSize: '0.82rem' }}>
                     <thead>
                       <tr>
-                        <th>请求时间</th>
-                        <th>客户端 IP & 地区</th>
-                        <th>调用邮箱账号</th>
-                        <th>服务商</th>
-                        <th>调用模式</th>
-                        <th>执行状态</th>
-                        <th>验证码</th>
-                        <th>耗时</th>
+                        <th style={{ padding: '9px 12px', fontSize: '0.78rem' }}>请求时间</th>
+                        <th style={{ padding: '9px 12px', fontSize: '0.78rem' }}>客户端 IP & 地区</th>
+                        <th style={{ padding: '9px 12px', fontSize: '0.78rem' }}>调用邮箱账号</th>
+                        <th style={{ padding: '9px 12px', fontSize: '0.78rem' }}>服务商</th>
+                        <th style={{ padding: '9px 12px', fontSize: '0.78rem' }}>调用模式</th>
+                        <th style={{ padding: '9px 12px', fontSize: '0.78rem' }}>执行状态</th>
+                        <th style={{ padding: '9px 12px', fontSize: '0.78rem' }}>提取验证码</th>
+                        <th style={{ padding: '9px 12px', fontSize: '0.78rem' }}>耗时</th>
                       </tr>
                     </thead>
                     <tbody>
                       {tokenLogsLoading ? (
                         <tr>
-                          <td colSpan={8} style={{ textAlign: 'center', padding: '30px', color: 'var(--by-text-secondary)' }}>
+                          <td colSpan={8} style={{ textAlign: 'center', padding: '36px', color: 'var(--by-text-secondary)' }}>
                             <RefreshCw size={18} className="animate-spin" style={{ margin: '0 auto 8px auto' }} />
-                            正在加载消耗记录...
+                            正在加载审计记录...
                           </td>
                         </tr>
                       ) : tokenLogs.length === 0 ? (
                         <tr>
-                          <td colSpan={8} style={{ textAlign: 'center', padding: '30px', color: 'var(--by-text-muted)' }}>
-                            该 Token 暂无消耗记录。通过 API 或带有 <code>?token=...</code> 的前台调用成功后将在此记录。
+                          <td colSpan={8} style={{ textAlign: 'center', padding: '36px', color: 'var(--by-text-muted)' }}>
+                            暂无【{tokenLogsStatusTab === 'success' ? '正常成功' : tokenLogsStatusTab === 'error' ? '异常免扣' : '全部'}】记录。
                           </td>
                         </tr>
                       ) : (
                         tokenLogs.map((log) => (
                           <tr key={log.id}>
-                            <td style={{ whiteSpace: 'nowrap', color: 'var(--by-text-secondary)' }}>
+                            <td style={{ whiteSpace: 'nowrap', color: 'var(--by-text-secondary)', padding: '9px 12px', fontSize: '0.8rem' }}>
                               {formatFullDateTime(log.createdAt)}
                             </td>
-                            <td>
+                            <td style={{ padding: '9px 12px' }}>
                               <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                <span style={{ fontFamily: 'var(--by-font-mono)', fontWeight: 600 }}>{log.clientIp}</span>
-                                <span style={{ fontSize: '0.72rem', color: 'var(--by-text-muted)' }}>{log.region}</span>
+                                <span style={{ fontFamily: 'var(--by-font-mono)', fontWeight: 600, fontSize: '0.82rem' }}>{log.clientIp}</span>
+                                <span style={{ fontSize: '0.7rem', color: 'var(--by-text-muted)', marginTop: '1px' }}>{log.region || '未知地区'}</span>
                               </div>
                             </td>
-                            <td>
+                            <td style={{ padding: '9px 12px' }}>
                               <div style={{ fontWeight: 600, color: 'var(--by-text-primary)' }}>{log.emailAccount}</div>
                             </td>
-                            <td>
+                            <td style={{ padding: '9px 12px' }}>
                               <span style={{ fontSize: '0.78rem' }}>
                                 {log.provider === 'mailcom' ? 'mail.com' : log.provider}
                               </span>
                             </td>
-                            <td>
-                              <span className="by-badge by-badge-info" style={{ fontSize: '0.72rem' }}>
+                            <td style={{ padding: '9px 12px' }}>
+                              <span className="by-badge by-badge-info" style={{ fontSize: '0.7rem', padding: '2px 6px' }}>
                                 {log.sourceMode === 'api_key' ? 'API 调用' : log.sourceMode === 'batch' ? '网页批量' : '网页单账号'}
                               </span>
                             </td>
-                            <td>
+                            <td style={{ padding: '9px 12px' }}>
                               {log.status === 'success' ? (
-                                <span className="by-badge by-badge-success" style={{ fontSize: '0.72rem' }}>成功</span>
+                                <span className="by-badge by-badge-success" style={{ fontSize: '0.7rem', padding: '2px 6px' }}>成功</span>
                               ) : log.status === 'no_code' ? (
-                                <span className="by-badge by-badge-info" style={{ fontSize: '0.72rem' }}>邮件获取</span>
+                                <span className="by-badge by-badge-info" style={{ fontSize: '0.7rem', padding: '2px 6px' }}>邮件获取</span>
                               ) : log.status === 'timeout' ? (
-                                <span className="by-badge by-badge-warning" style={{ fontSize: '0.72rem' }}>超时</span>
+                                <span className="by-badge by-badge-warning" style={{ fontSize: '0.7rem', padding: '2px 6px' }}>超时</span>
                               ) : log.status === 'captcha' ? (
-                                <span className="by-badge by-badge-danger" style={{ fontSize: '0.72rem' }}>验证码拦截</span>
+                                <span className="by-badge by-badge-danger" style={{ fontSize: '0.7rem', padding: '2px 6px' }}>验证码拦截</span>
                               ) : log.status === 'auth_failed' ? (
-                                <span className="by-badge by-badge-danger" style={{ fontSize: '0.72rem' }}>密码错误</span>
+                                <span className="by-badge by-badge-danger" style={{ fontSize: '0.7rem', padding: '2px 6px' }}>密码错误</span>
                               ) : (
-                                <span className="by-badge by-badge-danger" style={{ fontSize: '0.72rem' }}>异常</span>
+                                <span className="by-badge by-badge-danger" style={{ fontSize: '0.7rem', padding: '2px 6px' }} title={log.statusDetail || '异常'}>
+                                  异常
+                                </span>
                               )}
                             </td>
-                            <td>
+                            <td style={{ padding: '9px 12px' }}>
                               {log.extractedCode ? (
-                                <span style={{ fontFamily: 'var(--by-font-mono)', fontWeight: 700, color: 'var(--by-warning)' }}>
+                                <span style={{ fontFamily: 'var(--by-font-mono)', fontWeight: 700, color: 'var(--by-warning)', fontSize: '0.86rem' }}>
                                   {log.extractedCode}
                                 </span>
                               ) : (
                                 <span style={{ color: 'var(--by-text-muted)' }}>-</span>
                               )}
                             </td>
-                            <td style={{ color: 'var(--by-text-secondary)', fontFamily: 'var(--by-font-mono)' }}>
+                            <td style={{ color: 'var(--by-text-secondary)', fontFamily: 'var(--by-font-mono)', fontSize: '0.8rem', padding: '9px 12px' }}>
                               {formatDuration(log.durationMs)}
                             </td>
                           </tr>
@@ -886,8 +1056,8 @@ export const TokensView: React.FC = () => {
               </div>
 
               {/* Logs Modal Pagination Bar */}
-              <div className="by-pagination" style={{ padding: '12px 16px', borderTop: '1px solid var(--by-border)', marginTop: '4px' }}>
-                <div className="by-pagination-info">
+              <div className="by-pagination" style={{ padding: '10px 14px', borderTop: '1px solid var(--by-border)', marginTop: '2px' }}>
+                <div className="by-pagination-info" style={{ fontSize: '0.78rem' }}>
                   共 <span style={{ fontWeight: 700, color: 'var(--by-text-primary)' }}>{tokenLogsTotal}</span> 条记录 • 第 {tokenLogsPage} / {tokenLogsTotalPages} 页
                 </div>
 
@@ -898,20 +1068,20 @@ export const TokensView: React.FC = () => {
                     onChange={(e) => {
                       const newSize = Number(e.target.value);
                       setTokenLogsPageSize(newSize);
-                      handleOpenTokenLogs(tokenForLogs, 1, newSize);
+                      handleOpenTokenLogs(tokenForLogs, 1, newSize, tokenLogsStatusTab);
                     }}
                     style={{ width: 'auto', padding: '0 24px 0 8px', height: '28px', lineHeight: '26px', fontSize: '0.78rem' }}
                   >
-                    <option value="10">10条/页</option>
-                    <option value="20">20条/页</option>
-                    <option value="50">50条/页</option>
+                    <option value="6">6条/页</option>
+                    <option value="8">8条/页</option>
                   </select>
 
                   <button
                     type="button"
                     className="by-btn by-btn-secondary by-btn-sm"
+                    style={{ height: '28px', padding: '0 10px', fontSize: '0.78rem' }}
                     disabled={tokenLogsPage <= 1 || tokenLogsLoading}
-                    onClick={() => handleOpenTokenLogs(tokenForLogs, tokenLogsPage - 1, tokenLogsPageSize)}
+                    onClick={() => handleOpenTokenLogs(tokenForLogs, tokenLogsPage - 1, tokenLogsPageSize, tokenLogsStatusTab)}
                     title={tokenLogsPage <= 1 ? '已是第一页' : '上一页'}
                   >
                     <ChevronLeft size={13} /> 上一页
@@ -920,8 +1090,9 @@ export const TokensView: React.FC = () => {
                   <button
                     type="button"
                     className="by-btn by-btn-secondary by-btn-sm"
+                    style={{ height: '28px', padding: '0 10px', fontSize: '0.78rem' }}
                     disabled={tokenLogsPage >= tokenLogsTotalPages || tokenLogsLoading}
-                    onClick={() => handleOpenTokenLogs(tokenForLogs, tokenLogsPage + 1, tokenLogsPageSize)}
+                    onClick={() => handleOpenTokenLogs(tokenForLogs, tokenLogsPage + 1, tokenLogsPageSize, tokenLogsStatusTab)}
                     title={tokenLogsPage >= tokenLogsTotalPages ? '已是最后一页' : '下一页'}
                   >
                     下一页 <ChevronRight size={13} />
@@ -930,8 +1101,8 @@ export const TokensView: React.FC = () => {
               </div>
             </div>
 
-            <div className="by-modal-footer">
-              <button type="button" className="by-btn by-btn-secondary" onClick={() => setTokenForLogs(null)}>
+            <div className="by-modal-footer" style={{ padding: '12px 24px' }}>
+              <button type="button" className="by-btn by-btn-secondary" style={{ height: '32px', padding: '0 16px', fontSize: '0.84rem' }} onClick={() => setTokenForLogs(null)}>
                 关闭
               </button>
             </div>
