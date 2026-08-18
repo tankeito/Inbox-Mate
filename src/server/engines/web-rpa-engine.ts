@@ -66,6 +66,11 @@ export const MAIL_COM_LOGIN_TRIGGER_SELECTOR = [
   'a.button.button-login[href="homepage.html#navlogin"]',
   '#login-button'
 ].join(', ');
+export const MAILCOM_MAX_ATTEMPTS = 3;
+export const MAILCOM_TOTAL_BUDGET_MS = 65_000;
+export const MAILCOM_RETRY_BASE_DELAY_MS = 1_500;
+export const MAILCOM_RETRY_MAX_JITTER_MS = 1_000;
+export const MAILCOM_MIN_REMAINING_BUDGET_MS = 8_000;
 
 let sharedBrowser: Browser | null = null;
 let browserPromise: Promise<Browser> | null = null;
@@ -559,6 +564,80 @@ function isCaptchaPage(content: string): boolean {
     normalized.includes('cf-chl-captcha') ||
     normalized.includes('g-recaptcha')
   );
+}
+
+export function isMailComBlockedContent(content: string, url = ''): boolean {
+  const normalizedContent = content.toLowerCase();
+  const normalizedUrl = url.toLowerCase();
+  return (
+    normalizedContent.includes('"status-code":"403"') ||
+    normalizedContent.includes('"status-code": "403"') ||
+    normalizedContent.includes('"message":"blocked"') ||
+    normalizedContent.includes('"message": "blocked"') ||
+    normalizedContent.includes('"status-code":"429"') ||
+    normalizedContent.includes('"status-code": "429"') ||
+    normalizedContent.includes('{"error":{"status-code":') ||
+    (normalizedContent.includes('"error"') && normalizedContent.includes('"blocked"')) ||
+    normalizedContent.includes('403 forbidden') ||
+    normalizedContent.includes('access denied') ||
+    normalizedContent.includes('request blocked') ||
+    normalizedUrl.includes('error=blocked') ||
+    normalizedUrl.includes('error=403')
+  );
+}
+
+export function isRetryableMailComError(error: unknown): boolean {
+  if (error instanceof InboxMateError) {
+    if (
+      error.code === 'AUTH_FAILED' ||
+      error.code === 'AUTH_REQUIRED' ||
+      error.code === 'AUTH_DENIED' ||
+      error.code === 'AUTH_EXPIRED' ||
+      error.code === 'CANCELLED' ||
+      error.code === 'CAPTCHA_TRIGGERED' ||
+      error.code === 'BAD_REQUEST' ||
+      error.code === 'UNSUPPORTED_PROVIDER'
+    ) {
+      return false;
+    }
+    if (
+      error.code === 'PROXY_BLOCKED' ||
+      error.code === 'TIMEOUT' ||
+      error.code === 'CONNECTION_FAILED' ||
+      error.code === 'RATE_LIMITED' ||
+      error.code === 'INTERNAL'
+    ) {
+      return true;
+    }
+  }
+  return true;
+}
+
+export async function humanType(locator: Locator, text: string, delayMs = 35): Promise<void> {
+  const loc = locator as any;
+  if (typeof loc.pressSequentially === 'function') {
+    await loc.pressSequentially(text, { delay: delayMs });
+  } else if (typeof loc.type === 'function') {
+    await loc.type(text, { delay: delayMs });
+  } else if (typeof loc.fill === 'function') {
+    await loc.fill(text);
+  }
+}
+
+async function waitForMailComRetry(signal: AbortSignal, delayMs: number): Promise<void> {
+  if (signal.aborted) throw new InboxMateError('CANCELLED');
+  if (delayMs <= 0) return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new InboxMateError('CANCELLED'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function isAuthenticationFailure(url: string, content: string): boolean {
@@ -2328,25 +2407,22 @@ async function fetchOffiLiveAccount(
   }
 }
 
-/** Headless Playwright driver used for Mail.com-routed accounts. */
-async function fetchMailComAccount(
+async function fetchMailComSingleSession(
+  browser: Browser,
   account: AccountInput,
-  options: FetchAccountOptions
+  options: FetchAccountOptions,
+  attempt: number,
+  maxAttempts: number,
+  traceId: string,
+  proxy: ProxyResolution,
+  overallDeadline: number,
+  startTime: number
 ): Promise<FetchAccountResult> {
-  if (account.auth.type !== 'app_password') {
-    throw new InboxMateError('AUTH_REQUIRED', 400, 'Mail.com 网页抓取需要邮箱账号密码。');
-  }
-  if (options.signal.aborted) throw new InboxMateError('CANCELLED');
-
   const email = account.email;
   const password = account.auth.secret;
-  const traceId = options.traceId || randomUUID();
   let stage = '启动浏览器';
   let context: BrowserContext | null = null;
   let activePage: Page | null = null;
-  let browserAcquired = false;
-  const proxy = await detectRpaProxy();
-  logNetworkResolution(proxy);
 
   const closeOnAbort = (): void => {
     void context?.close().catch(() => {});
@@ -2356,18 +2432,16 @@ async function fetchMailComAccount(
   try {
     options.onProgress('authenticating');
     stage = '启动浏览器';
-    const startTime = Date.now();
     const currentConcurrent = activeRunningAccounts;
     diagLogger.info(
       'web_rpa',
       stage,
-      `启动无头浏览器 [并发任务数: ${currentConcurrent}, 代理: ${proxy.server ?? '直连'}]`,
-      { proxy: proxy.source, proxyServer: proxy.server, concurrentTasks: currentConcurrent, traceId },
+      `启动无头浏览器 [并发任务数: ${currentConcurrent}, 代理: ${proxy.server ?? '直连'}, 尝试: ${attempt}/${maxAttempts}]`,
+      { proxy: proxy.source, proxyServer: proxy.server, concurrentTasks: currentConcurrent, attempt, maxAttempts, traceId },
       email,
       traceId
     );
-    const browser = await acquireBrowser();
-    browserAcquired = true;
+
     context = await browser.newContext({
       proxy: proxy.server ? { server: proxy.server } : undefined,
       viewport: { width: 1280, height: 800 },
@@ -2449,7 +2523,17 @@ async function fetchMailComAccount(
       resolveMailList = resolve;
     });
 
+    let loginBlocked = false;
+    let blockedReason = '';
+
     page.on('response', async (response) => {
+      const respUrl = response.url().toLowerCase();
+      const status = response.status();
+      if ((respUrl.includes('/login') || respUrl.includes('/navigator/')) && (status === 403 || status === 429)) {
+        loginBlocked = true;
+        blockedReason = `HTTP ${status}`;
+      }
+
       if (response.url().includes('/navigator/oauth2/token')) {
         const postData = response.request().postData() ?? '';
         if (postData.includes('scope=mail_mailbox_r')) {
@@ -2487,21 +2571,29 @@ async function fetchMailComAccount(
       diagLogger.warn('web_rpa', stage, '首页触发 Cloudflare/验证码阻拦', { ...snapshot, concurrentTasks: activeRunningAccounts }, email, traceId);
       throw new InboxMateError('CAPTCHA_TRIGGERED');
     }
+    if (isMailComBlockedContent(initialContent, page.url())) {
+      const snapshot = await captureForensicsSnapshot(page, stage);
+      diagLogger.warn('web_rpa', stage, '首页触发安全风控拦截 (403 Blocked)', { ...snapshot, concurrentTasks: activeRunningAccounts }, email, traceId);
+      throw new InboxMateError('PROXY_BLOCKED', 400, 'Mail.com 访问被目标安全风控拦截（HTTP 403 Blocked）。');
+    }
 
     stage = '打开登录框';
     const { emailInput, passwordInput } = await ensureMailComLoginFormVisible(page);
 
     stage = '填写账号密码';
-    await emailInput.fill(email);
-    await passwordInput.fill(password);
+    await humanType(emailInput, email, Math.floor(Math.random() * 20 + 25));
+    await page.waitForTimeout(Math.floor(Math.random() * 150 + 100));
+    await humanType(passwordInput, password, Math.floor(Math.random() * 25 + 30));
+    await page.waitForTimeout(Math.floor(Math.random() * 200 + 150));
 
     options.onProgress('searching');
     stage = '提交登录';
-    diagLogger.debug('web_rpa', stage, `提交登录表单 (当前并发: ${activeRunningAccounts})`, { currentUrl: page.url() }, email, traceId);
+    diagLogger.debug('web_rpa', stage, `提交登录表单 (当前并发: ${activeRunningAccounts}, 尝试: ${attempt}/${maxAttempts})`, { currentUrl: page.url() }, email, traceId);
     const loginForm = page.locator('form').filter({ has: emailInput });
     const submitButton = loginForm.locator('button[type="submit"]').filter({ visible: true }).first();
-    if ((await submitButton.count()) > 0) await submitButton.click({ timeout: 10_000 });
-    else {
+    if ((await submitButton.count()) > 0) {
+      await submitButton.click({ timeout: 10_000 });
+    } else {
       await loginForm.evaluate((form) => {
         if (!(form instanceof HTMLFormElement)) throw new Error('Mail.com login form not found');
         form.requestSubmit();
@@ -2509,10 +2601,17 @@ async function fetchMailComAccount(
     }
 
     stage = '等待收件箱';
-    const deadline = Date.now() + 30_000;
+    const singleSessionTimeout = Math.min(25_000, Math.max(5_000, overallDeadline - Date.now() - 2_000));
+    const deadline = Date.now() + singleSessionTimeout;
     let lastSkipAttempt = 0;
 
     while (Date.now() < deadline && !mailListSeen) {
+      if (loginBlocked) {
+        const snapshot = await captureForensicsSnapshot(page, stage);
+        diagLogger.warn('web_rpa', stage, `登录触发目标安全风控拦截 (${blockedReason || '403 Blocked'})`, { ...snapshot, concurrentTasks: activeRunningAccounts }, email, traceId);
+        throw new InboxMateError('PROXY_BLOCKED', 400, `Mail.com 登录被目标安全风控拦截（${blockedReason || 'HTTP 403 Blocked'}）。`);
+      }
+
       const remaining = deadline - Date.now();
       const loaded = await Promise.race([
         mailListPromise.then(() => true),
@@ -2528,6 +2627,11 @@ async function fetchMailComAccount(
 
       const currentUrl = page.url();
       const content = await page.content().catch(() => '');
+      if (loginBlocked || isMailComBlockedContent(content, currentUrl)) {
+        const snapshot = await captureForensicsSnapshot(page, stage);
+        diagLogger.warn('web_rpa', stage, '检测到 Mail.com 安全风控拦截页面 (403 Blocked)', { ...snapshot, concurrentTasks: activeRunningAccounts }, email, traceId);
+        throw new InboxMateError('PROXY_BLOCKED', 400, 'Mail.com 登录被目标安全风控拦截（HTTP 403 Blocked）。');
+      }
       if (isCaptchaPage(content)) {
         const snapshot = await captureForensicsSnapshot(page, stage);
         diagLogger.warn('web_rpa', stage, '登录中触发验证码阻拦', { ...snapshot, concurrentTasks: activeRunningAccounts }, email, traceId);
@@ -2544,6 +2648,10 @@ async function fetchMailComAccount(
       const content = await page.content().catch(() => '');
       const snapshot = await captureForensicsSnapshot(page, stage);
 
+      if (loginBlocked || isMailComBlockedContent(content, page.url())) {
+        diagLogger.warn('web_rpa', stage, '检测到 Mail.com 安全风控拦截页面 (403 Blocked)', { ...snapshot, concurrentTasks: activeRunningAccounts }, email, traceId);
+        throw new InboxMateError('PROXY_BLOCKED', 400, 'Mail.com 登录被目标安全风控拦截（HTTP 403 Blocked）。');
+      }
       if (isCaptchaPage(content)) {
         diagLogger.warn('web_rpa', stage, '登录后检测到验证码', { ...snapshot, concurrentTasks: activeRunningAccounts }, email, traceId);
         throw new InboxMateError('CAPTCHA_TRIGGERED');
@@ -2556,7 +2664,7 @@ async function fetchMailComAccount(
       diagLogger.warn(
         'web_rpa',
         stage,
-        `30秒内未加载出收件箱列表 (并发: ${activeRunningAccounts}, 耗时: ${formatDuration(Date.now() - startTime)})`,
+        `单次会话未在 ${Math.round(singleSessionTimeout / 1000)} 秒内加载出收件箱列表 (并发: ${activeRunningAccounts}, 尝试: ${attempt}/${maxAttempts}, 耗时: ${formatDuration(Date.now() - startTime)})`,
         {
           ...snapshot,
           concurrentTasks: activeRunningAccounts,
@@ -2570,7 +2678,7 @@ async function fetchMailComAccount(
       throw new InboxMateError(
         'TIMEOUT',
         400,
-        `Mail.com 登录成功后未在 30 秒内加载收件箱（当前并发: ${activeRunningAccounts}）。`
+        `Mail.com 登录成功后未在 ${Math.round(singleSessionTimeout / 1000)} 秒内加载收件箱（当前并发: ${activeRunningAccounts}）。`
       );
     }
 
@@ -2603,7 +2711,8 @@ async function fetchMailComAccount(
       code: mapped.primaryCode?.code,
       messageCount: mapped.messages.length,
       durationMs: Date.now() - startTime,
-      concurrentTasks: activeRunningAccounts
+      concurrentTasks: activeRunningAccounts,
+      attempts: attempt
     }, email, traceId);
 
     return mapped;
@@ -2612,7 +2721,9 @@ async function fetchMailComAccount(
     if (error instanceof InboxMateError) {
       diagLogger.warn('web_rpa', stage, `业务异常: ${error.message} (并发任务数: ${activeRunningAccounts})`, {
         code: error.code,
-        concurrentTasks: activeRunningAccounts
+        concurrentTasks: activeRunningAccounts,
+        attempt,
+        maxAttempts
       }, email, traceId);
       throw error;
     }
@@ -2623,13 +2734,124 @@ async function fetchMailComAccount(
       ...snapshot,
       stage,
       concurrentTasks: activeRunningAccounts,
-      proxy: proxy.server
+      proxy: proxy.server,
+      attempt,
+      maxAttempts
     }, email, traceId);
     throw classified;
   } finally {
     options.signal.removeEventListener('abort', closeOnAbort);
     if (context) await context.close().catch(() => {});
-    if (browserAcquired) await releaseBrowser();
+  }
+}
+
+/** Headless Playwright driver used for Mail.com-routed accounts with intelligent retry. */
+export async function fetchMailComAccount(
+  account: AccountInput,
+  options: FetchAccountOptions
+): Promise<FetchAccountResult> {
+  if (account.auth.type !== 'app_password') {
+    throw new InboxMateError('AUTH_REQUIRED', 400, 'Mail.com 网页抓取需要邮箱账号密码。');
+  }
+  if (options.signal.aborted) throw new InboxMateError('CANCELLED');
+
+  const email = account.email;
+  const traceId = options.traceId || randomUUID();
+  const startTime = Date.now();
+  const overallDeadline = startTime + MAILCOM_TOTAL_BUDGET_MS;
+  const proxy = await detectRpaProxy();
+  logNetworkResolution(proxy);
+
+  let browserAcquired = false;
+  let browser: Browser | null = null;
+
+  try {
+    // Hold 1 browser concurrency semaphore across all retry attempts in this task
+    browser = await acquireBrowser();
+    browserAcquired = true;
+
+    for (let attempt = 1; attempt <= MAILCOM_MAX_ATTEMPTS; attempt += 1) {
+      if (options.signal.aborted) throw new InboxMateError('CANCELLED');
+
+      const remainingBudget = overallDeadline - Date.now();
+      if (remainingBudget < MAILCOM_MIN_REMAINING_BUDGET_MS && attempt > 1) {
+        diagLogger.warn(
+          'web_rpa',
+          '重试超时',
+          `Mail.com 任务总耗时预算不足 (${Math.round(remainingBudget / 1000)}s)，停止后续重试`,
+          { attempt, maxAttempts: MAILCOM_MAX_ATTEMPTS, elapsedMs: Date.now() - startTime },
+          email,
+          traceId
+        );
+        break;
+      }
+
+      try {
+        if (attempt > 1) {
+          diagLogger.info(
+            'web_rpa',
+            '发起重试',
+            `开始第 ${attempt}/${MAILCOM_MAX_ATTEMPTS} 次无痕会话尝试 (已耗时: ${formatDuration(Date.now() - startTime)})`,
+            { attempt, maxAttempts: MAILCOM_MAX_ATTEMPTS, proxy: proxy.server ?? '直连' },
+            email,
+            traceId
+          );
+        }
+
+        return await fetchMailComSingleSession(
+          browser,
+          account,
+          options,
+          attempt,
+          MAILCOM_MAX_ATTEMPTS,
+          traceId,
+          proxy,
+          overallDeadline,
+          startTime
+        );
+      } catch (error) {
+        if (options.signal.aborted) throw new InboxMateError('CANCELLED');
+
+        const shouldRetry =
+          isRetryableMailComError(error) &&
+          attempt < MAILCOM_MAX_ATTEMPTS &&
+          overallDeadline - Date.now() > MAILCOM_MIN_REMAINING_BUDGET_MS;
+
+        if (!shouldRetry) {
+          throw error;
+        }
+
+        const backoffBase = MAILCOM_RETRY_BASE_DELAY_MS * (2 ** (attempt - 1));
+        const jitter = Math.floor(Math.random() * MAILCOM_RETRY_MAX_JITTER_MS);
+        const retryDelay = Math.min(
+          backoffBase + jitter,
+          Math.max(0, overallDeadline - Date.now() - MAILCOM_MIN_REMAINING_BUDGET_MS)
+        );
+
+        const errMessage = error instanceof Error ? error.message : String(error);
+        diagLogger.warn(
+          'web_rpa',
+          '异常退避',
+          `Mail.com 抓取遭遇临时阻断或异常 [${errMessage}]，等待 ${retryDelay}ms 后执行第 ${attempt + 1}/${MAILCOM_MAX_ATTEMPTS} 次无痕重试`,
+          {
+            attempt,
+            maxAttempts: MAILCOM_MAX_ATTEMPTS,
+            retryDelayMs: retryDelay,
+            error: errMessage
+          },
+          email,
+          traceId
+        );
+
+        await waitForMailComRetry(options.signal, retryDelay);
+      }
+    }
+
+    throw new InboxMateError('TIMEOUT', 400, `Mail.com 多次重试后仍未成功加载收件箱（共尝试 ${MAILCOM_MAX_ATTEMPTS} 次）。`);
+  } finally {
+    if (browserAcquired) {
+      await releaseBrowser();
+    }
   }
 }
 

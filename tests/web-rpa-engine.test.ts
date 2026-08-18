@@ -1,5 +1,6 @@
-import type { APIRequestContext, APIResponse, Page, Route } from 'playwright';
+import type { APIRequestContext, APIResponse, Locator, Page, Route } from 'playwright';
 import { describe, expect, it, vi } from 'vitest';
+import { InboxMateError } from '../src/server/errors';
 import {
   buildOffiLiveAppDataUrl,
   buildOffiLiveAjaxUrl,
@@ -9,10 +10,15 @@ import {
   ensureMailComLoginFormVisible,
   fetchAccountVerificationCodeViaWebRpa,
   fetchOffiLiveViaAjax,
+  humanType,
   installOffiLiveNetworkGuards,
+  isMailComBlockedContent,
   isOffiLiveThemeStylesheetUrl,
   isOffiLiveUpstreamFailure,
+  isRetryableMailComError,
   MAIL_COM_LOGIN_TRIGGER_SELECTOR,
+  MAILCOM_MAX_ATTEMPTS,
+  MAILCOM_TOTAL_BUDGET_MS,
   OFFILIVE_AJAX_URL,
   OFFILIVE_EMAIL_SELECTOR,
   OFFILIVE_LOGIN_URL,
@@ -1064,3 +1070,57 @@ describe('Windows proxy parsing', () => {
     expect(parseWindowsProxyServer('127.0.0.1')).toBeUndefined();
   });
 });
+
+describe('Mail.com 403 / WAF blocked detection and retry policies', () => {
+  it('detects the exact Mail.com 403 blocked JSON response payload', () => {
+    const raw403Json = '{"error":{"status-code":"403","message":"blocked","request-id":"d19f4d19baa03ecfb93f77dfc80627ee-4"}}';
+    expect(isMailComBlockedContent(raw403Json)).toBe(true);
+  });
+
+  it('detects variations of blocked responses and 429 rate limit errors', () => {
+    expect(isMailComBlockedContent('{"error":{"status-code":"429","message":"rate_limited"}}')).toBe(true);
+    expect(isMailComBlockedContent('{"error": "blocked"}')).toBe(true);
+    expect(isMailComBlockedContent('<html><body>403 Forbidden - Access Denied</body></html>')).toBe(true);
+    expect(isMailComBlockedContent('Request blocked by security filter')).toBe(true);
+    expect(isMailComBlockedContent('<html>normal page</html>', 'https://login.mail.com/login?error=blocked')).toBe(true);
+  });
+
+  it('returns false for normal Mail.com webmail content', () => {
+    expect(isMailComBlockedContent('<html><div class="mail-list">Welcome user</div></html>')).toBe(false);
+    expect(isMailComBlockedContent('{"status": 200, "data": []}')).toBe(false);
+  });
+
+  it('correctly classifies retryable vs non-retryable Mail.com errors', () => {
+    // Retryable errors:
+    expect(isRetryableMailComError(new InboxMateError('PROXY_BLOCKED', 400))).toBe(true);
+    expect(isRetryableMailComError(new InboxMateError('TIMEOUT', 400))).toBe(true);
+    expect(isRetryableMailComError(new InboxMateError('CONNECTION_FAILED', 400))).toBe(true);
+    expect(isRetryableMailComError(new InboxMateError('RATE_LIMITED', 429))).toBe(true);
+
+    // Non-retryable errors:
+    expect(isRetryableMailComError(new InboxMateError('AUTH_FAILED', 400))).toBe(false);
+    expect(isRetryableMailComError(new InboxMateError('AUTH_REQUIRED', 400))).toBe(false);
+    expect(isRetryableMailComError(new InboxMateError('CAPTCHA_TRIGGERED', 400))).toBe(false);
+    expect(isRetryableMailComError(new InboxMateError('CANCELLED', 400))).toBe(false);
+  });
+
+  it('supports human-like typing delay on input locators', async () => {
+    const pressSequentially = vi.fn(async () => {});
+    const fill = vi.fn(async () => {});
+    const locatorWithPress = { pressSequentially, fill } as unknown as Locator;
+
+    await humanType(locatorWithPress, 'secret123', 30);
+    expect(pressSequentially).toHaveBeenCalledWith('secret123', { delay: 30 });
+    expect(fill).not.toHaveBeenCalled();
+
+    const legacyLocator = { fill } as unknown as Locator;
+    await humanType(legacyLocator, 'user@mail.com', 30);
+    expect(fill).toHaveBeenCalledWith('user@mail.com');
+  });
+
+  it('maintains expected retry constants for Mail.com RPA lifecycle', () => {
+    expect(MAILCOM_MAX_ATTEMPTS).toBe(3);
+    expect(MAILCOM_TOTAL_BUDGET_MS).toBe(65_000);
+  });
+});
+
