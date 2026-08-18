@@ -2410,6 +2410,8 @@ async function fetchOffiLiveAccount(
 async function fetchMailComSingleSession(
   browser: Browser,
   account: AccountInput,
+  email: string,
+  password: string,
   options: FetchAccountOptions,
   attempt: number,
   maxAttempts: number,
@@ -2418,8 +2420,6 @@ async function fetchMailComSingleSession(
   overallDeadline: number,
   startTime: number
 ): Promise<FetchAccountResult> {
-  const email = account.email;
-  const password = account.auth.secret;
   let stage = '启动浏览器';
   let context: BrowserContext | null = null;
   let activePage: Page | null = null;
@@ -2756,6 +2756,7 @@ export async function fetchMailComAccount(
   if (options.signal.aborted) throw new InboxMateError('CANCELLED');
 
   const email = account.email;
+  const password = account.auth.secret;
   const traceId = options.traceId || randomUUID();
   const startTime = Date.now();
   const overallDeadline = startTime + MAILCOM_TOTAL_BUDGET_MS;
@@ -2801,6 +2802,8 @@ export async function fetchMailComAccount(
         return await fetchMailComSingleSession(
           browser,
           account,
+          email,
+          password,
           options,
           attempt,
           MAILCOM_MAX_ATTEMPTS,
