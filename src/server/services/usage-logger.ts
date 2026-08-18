@@ -19,6 +19,9 @@ export interface UsageEvent {
   messageCount?: number;
   tokenId?: string;
   token?: string;
+  proxyName?: string;
+  proxyServer?: string;
+  networkMode?: 'proxy' | 'direct';
 }
 
 export interface UsageLogItem {
@@ -37,6 +40,9 @@ export interface UsageLogItem {
   messageCount: number;
   tokenId?: string;
   token?: string;
+  proxyName?: string;
+  proxyServer?: string;
+  networkMode?: 'proxy' | 'direct';
   createdAt: string;
 }
 
@@ -134,22 +140,41 @@ export class UsageLoggerService {
       const email = rawEmail || 'unknown@custom.com';
       const atIndex = email.lastIndexOf('@');
       const domain = atIndex > 0 ? email.slice(atIndex + 1).toLowerCase() : 'unknown';
-      const masked = maskEmail(email);
       const now = new Date().toISOString();
+
+      let proxyName = event.proxyName;
+      let proxyServer = event.proxyServer;
+      let networkMode = event.networkMode;
+
+      if (!proxyName && id) {
+        try {
+          const proxyLog = db.prepare('SELECT proxy_name, proxy_server FROM proxy_traffic_logs WHERE trace_id = ? LIMIT 1').get(id) as any;
+          if (proxyLog) {
+            proxyName = proxyLog.proxy_name;
+            proxyServer = proxyLog.proxy_server;
+            networkMode = 'proxy';
+          }
+        } catch {}
+      }
+
+      if (!networkMode) {
+        networkMode = proxyName ? 'proxy' : 'direct';
+      }
 
       const stmt = db.prepare(`
         INSERT INTO usage_logs (
           id, client_ip, region, email_account, email_domain, provider,
           source_mode, status, status_detail, has_code, extracted_code,
-          duration_ms, message_count, token_id, token, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          duration_ms, message_count, token_id, token, proxy_name, proxy_server,
+          network_mode, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       stmt.run(
         id,
         ip,
         region,
-        masked,
+        email,
         domain,
         event.provider || 'custom',
         event.sourceMode || 'single',
@@ -161,6 +186,9 @@ export class UsageLoggerService {
         event.messageCount || 0,
         event.tokenId || null,
         event.token || null,
+        proxyName || null,
+        proxyServer || null,
+        networkMode,
         now
       );
     } catch (err) {
@@ -178,33 +206,33 @@ export class UsageLoggerService {
 
     if (params.search && params.search.trim()) {
       const q = `%${params.search.trim()}%`;
-      conditions.push('(email_account LIKE ? OR client_ip LIKE ? OR region LIKE ? OR extracted_code LIKE ? OR token LIKE ?)');
-      args.push(q, q, q, q, q);
+      conditions.push('(email_account LIKE ? OR client_ip LIKE ? OR region LIKE ? OR extracted_code LIKE ? OR token LIKE ? OR proxy_name LIKE ?)');
+      args.push(q, q, q, q, q, q);
     }
 
     if (params.status && params.status !== 'all') {
       conditions.push('status = ?');
-      args.push(params.status);
+      args.push(params.status.trim());
     }
 
     if (params.provider && params.provider !== 'all') {
       conditions.push('provider = ?');
-      args.push(params.provider);
+      args.push(params.provider.trim());
     }
 
     if (params.sourceMode && params.sourceMode !== 'all') {
       conditions.push('source_mode = ?');
-      args.push(params.sourceMode);
+      args.push(params.sourceMode.trim());
     }
 
-    if (params.tokenId) {
+    if (params.tokenId && params.tokenId.trim()) {
       conditions.push('token_id = ?');
-      args.push(params.tokenId);
+      args.push(params.tokenId.trim());
     }
 
-    if (params.token) {
+    if (params.token && params.token.trim()) {
       conditions.push('token = ?');
-      args.push(params.token);
+      args.push(params.token.trim());
     }
 
     if (params.startDate && params.startDate.trim()) {
@@ -254,6 +282,9 @@ export class UsageLoggerService {
       messageCount: r.message_count,
       tokenId: r.token_id || undefined,
       token: r.token || undefined,
+      proxyName: r.proxy_name || undefined,
+      proxyServer: r.proxy_server || undefined,
+      networkMode: (r.network_mode as any) || (r.proxy_name ? 'proxy' : 'direct'),
       createdAt: r.created_at
     }));
 

@@ -11,6 +11,7 @@ import { apiKeyService } from '../services/api-key-service.js';
 import { accessTokenService } from '../services/access-token-service.js';
 import { ipBlockService } from '../services/ip-block-service.js';
 import { systemSettingsService } from '../services/system-settings-service.js';
+import { proxyService } from '../services/proxy-service.js';
 import { getRpaStatus, restartSharedBrowser, testRpaHealthCheck } from '../engines/web-rpa-engine.js';
 
 function firstParam(value: string | string[] | undefined): string {
@@ -605,6 +606,172 @@ export function createBackyardRouter(): express.Router {
       });
     } catch (err: any) {
       res.status(400).json({ error: err.message || '重置系统配置失败' });
+    }
+  });
+
+  // ================= Proxy Network & Traffic Pool Routes =================
+  router.get('/proxy/config', requireAdmin, (_req: Request, res: Response) => {
+    try {
+      const config = proxyService.getConfig();
+      const nodes = proxyService.listNodes();
+      const summary = proxyService.getTrafficSummary();
+      res.json({ config, nodes, summary });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '获取代理配置失败' });
+    }
+  });
+
+  router.post('/proxy/config', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const updated = proxyService.updateConfig(req.body || {});
+      const summary = proxyService.getTrafficSummary();
+      res.json({
+        ok: true,
+        message: '代理全局网络与调度配置已成功保存！',
+        config: updated,
+        summary
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '保存代理配置失败' });
+    }
+  });
+
+  router.get('/proxy/nodes', requireAdmin, (_req: Request, res: Response) => {
+    try {
+      const nodes = proxyService.listNodes();
+      res.json({ nodes, total: nodes.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '获取代理节点列表失败' });
+    }
+  });
+
+  router.post('/proxy/nodes', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const { batchText, defaultProtocol, ...singleInput } = req.body || {};
+      if (batchText && typeof batchText === 'string' && batchText.trim()) {
+        const result = proxyService.batchImport(batchText, defaultProtocol);
+        const nodes = proxyService.listNodes();
+        const summary = proxyService.getTrafficSummary();
+        res.json({
+          ok: true,
+          message: `批量导入完成：成功导入 ${result.imported} 个节点${result.errors.length > 0 ? `，${result.errors.length} 行解析异常` : ''}`,
+          ...result,
+          nodes,
+          summary
+        });
+        return;
+      }
+
+      if (!singleInput.server) {
+        res.status(400).json({ error: '请提供有效的代理服务器地址' });
+        return;
+      }
+
+      const node = proxyService.addNode(singleInput);
+      const summary = proxyService.getTrafficSummary();
+      res.json({
+        ok: true,
+        message: '代理节点添加成功',
+        node,
+        summary
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '添加代理节点失败' });
+    }
+  });
+
+  router.put('/proxy/nodes/:id', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const id = firstParam(req.params.id);
+      const updated = proxyService.updateNode(id, req.body || {});
+      const summary = proxyService.getTrafficSummary();
+      res.json({
+        ok: true,
+        message: '代理节点配置已更新',
+        node: updated,
+        summary
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '更新代理节点失败' });
+    }
+  });
+
+  router.delete('/proxy/nodes/:id', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const id = firstParam(req.params.id);
+      const success = proxyService.deleteNode(id);
+      const summary = proxyService.getTrafficSummary();
+      res.json({
+        ok: success,
+        message: success ? '代理节点已成功删除' : '未找到该节点',
+        summary
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '删除代理节点失败' });
+    }
+  });
+
+  router.post('/proxy/nodes/:id/test', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const id = firstParam(req.params.id);
+      const testRes = await proxyService.testProxyNode(id);
+      const node = proxyService.getNode(id);
+      res.json({
+        ok: testRes.success,
+        result: testRes,
+        node
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '节点测速失败' });
+    }
+  });
+
+  router.post('/proxy/test-raw', requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { server } = req.body || {};
+      if (!server || typeof server !== 'string') {
+        res.status(400).json({ error: '请提供待测代理地址' });
+        return;
+      }
+      const parsed = proxyService.parseSingleProxy(server);
+      const testRes = await proxyService.probeServer(parsed.server);
+      res.json({
+        ok: testRes.success,
+        parsed,
+        result: testRes
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '测速失败' });
+    }
+  });
+
+  router.post('/proxy/test-all', requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const results = await proxyService.testAllNodes();
+      const nodes = proxyService.listNodes();
+      const summary = proxyService.getTrafficSummary();
+      res.json({
+        ok: true,
+        message: `批量测速完成，共测试 ${results.length} 个节点`,
+        results,
+        nodes,
+        summary
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '批量测速异常' });
+    }
+  });
+
+  router.get('/proxy/traffic', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const page = Number(req.query.page) || 1;
+      const pageSize = Number(req.query.pageSize) || 10;
+      const proxyId = (req.query.proxyId as string) || undefined;
+      const result = proxyService.getTrafficLogs({ page, pageSize, proxyId });
+      const summary = proxyService.getTrafficSummary();
+      res.json({ ...result, summary });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '获取流量消耗日志失败' });
     }
   });
 

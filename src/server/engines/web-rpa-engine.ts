@@ -20,6 +20,7 @@ import { formatDuration } from '../../shared/format-utils.js';
 import { InboxMateError } from '../errors.js';
 import type { FetchAccountOptions, FetchAccountResult } from '../imap-client.js';
 import { diagLogger } from '../services/diag-logger.js';
+import { proxyService } from '../services/proxy-service.js';
 import { domainFromEmail, isOffiLiveDomain } from '../providers.js';
 
 const MAIL_COM_HOME = 'https://www.mail.com';
@@ -47,7 +48,7 @@ export const OFFILIVE_EMAIL_SELECTOR = 'input#RainLoopEmail, input[name="RainLoo
 export const OFFILIVE_PASSWORD_SELECTOR =
   'input#RainLoopPassword, input[name="RainLoopPassword"], input.inputPassword';
 const OFFILIVE_LOGIN_ATTEMPTS = 2;
-const OFFILIVE_NAVIGATION_TIMEOUT_MS = 30_000;
+export const OFFILIVE_NAVIGATION_TIMEOUT_MS = 30_000;
 const OFFILIVE_LOGIN_BUDGET_MS = 55_000;
 const OFFILIVE_AJAX_BOOTSTRAP_ATTEMPTS = 2;
 const OFFILIVE_AJAX_AUTH_CONFIRM_ATTEMPTS = 4;
@@ -78,7 +79,9 @@ let lastNetworkLog = '';
 
 export interface ProxyResolution {
   server?: string;
-  source: 'direct' | 'environment' | 'windows-system' | 'local-port';
+  source: 'direct' | 'environment' | 'windows-system' | 'local-port' | 'proxy-pool';
+  proxyId?: string;
+  proxyName?: string;
 }
 
 export interface CapturedMailPayload {
@@ -215,7 +218,18 @@ async function probeHttpProxy(proxyServer: string): Promise<boolean> {
   });
 }
 
-async function detectRpaProxy(): Promise<ProxyResolution> {
+async function detectRpaProxy(options?: { excludeProxyId?: string; isRetry?: boolean; provider?: string }): Promise<ProxyResolution> {
+  // 1. Managed Proxy Pool (highest priority when enabled in backend)
+  const poolProxy = proxyService.acquireProxy(options);
+  if (poolProxy) {
+    return {
+      server: poolProxy.server,
+      source: 'proxy-pool',
+      proxyId: poolProxy.id,
+      proxyName: poolProxy.name
+    };
+  }
+
   const explicit = process.env.RPA_PROXY?.trim();
   if (explicit && /^(direct|none|off)$/i.test(explicit)) return { source: 'direct' };
 
@@ -260,10 +274,13 @@ async function getSharedBrowser(): Promise<Browser> {
     try {
       const browser = await chromium.launch({
         headless: true,
-        args:
-          process.platform === 'linux'
-            ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-            : []
+        args: [
+          '--disable-blink-features=AutomationControlled',
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-infobars',
+          ...(process.platform === 'linux' ? ['--disable-dev-shm-usage'] : [])
+        ]
       });
       sharedBrowser = browser;
       browser.once('disconnected', () => {
@@ -2423,6 +2440,8 @@ async function fetchMailComSingleSession(
   let stage = '启动浏览器';
   let context: BrowserContext | null = null;
   let activePage: Page | null = null;
+  let totalBytesReceived = 0;
+  let sessionSuccess = false;
 
   const closeOnAbort = (): void => {
     void context?.close().catch(() => {});
@@ -2445,9 +2464,36 @@ async function fetchMailComSingleSession(
     context = await browser.newContext({
       proxy: proxy.server ? { server: proxy.server } : undefined,
       viewport: { width: 1280, height: 800 },
-      locale: 'en-US'
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      locale: 'en-US',
+      timezoneId: 'America/New_York',
+      extraHTTPHeaders: {
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"'
+      }
     });
     if (options.signal.aborted) throw new InboxMateError('CANCELLED');
+
+    // Anti-bot detection stealth injection
+    await context.addInitScript(() => {
+      try {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      } catch {}
+      try {
+        if (!(window as any).chrome) (window as any).chrome = {};
+        (window as any).chrome.runtime = {};
+        (window as any).chrome.loadTimes = function () {};
+        (window as any).chrome.csi = function () {};
+        (window as any).chrome.app = {};
+      } catch {}
+      try {
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+      } catch {}
+    });
 
     const page = await context.newPage();
     activePage = page;
@@ -2527,6 +2573,15 @@ async function fetchMailComSingleSession(
     let blockedReason = '';
 
     page.on('response', async (response) => {
+      try {
+        const contentLength = Number(response.headers()['content-length'] || 0);
+        if (contentLength > 0) {
+          totalBytesReceived += contentLength;
+        } else {
+          totalBytesReceived += 512;
+        }
+      } catch {}
+
       const respUrl = response.url().toLowerCase();
       const status = response.status();
       if ((respUrl.includes('/login') || respUrl.includes('/navigator/')) && (status === 403 || status === 429)) {
@@ -2707,6 +2762,7 @@ async function fetchMailComSingleSession(
     if (options.signal.aborted) throw new InboxMateError('CANCELLED');
 
     const mapped = mapResult(account, selectedMails);
+    sessionSuccess = true;
     diagLogger.info('web_rpa', '抓取成功', `完成邮件抓取，识别验证码: ${mapped.primaryCode?.code || '无'} (总耗时: ${formatDuration(Date.now() - startTime)})`, {
       code: mapped.primaryCode?.code,
       messageCount: mapped.messages.length,
@@ -2741,6 +2797,17 @@ async function fetchMailComSingleSession(
     throw classified;
   } finally {
     options.signal.removeEventListener('abort', closeOnAbort);
+    if (proxy.proxyId) {
+      proxyService.recordTraffic({
+        proxyId: proxy.proxyId,
+        bytesReceived: totalBytesReceived,
+        bytesSent: Math.max(1024, Math.round(totalBytesReceived * 0.1)),
+        durationMs: Date.now() - startTime,
+        status: sessionSuccess ? 'success' : 'error',
+        traceId,
+        emailAccount: email
+      });
+    }
     if (context) await context.close().catch(() => {});
   }
 }
@@ -2787,19 +2854,26 @@ export async function fetchMailComAccount(
         break;
       }
 
+      // Attempt 1 obeys routing_mode (direct_first uses direct); Attempt > 1 uses proxy pool (fallback)
+      const currentProxy = await detectRpaProxy({
+        excludeProxyId: attempt > 1 ? proxy.proxyId : undefined,
+        isRetry: attempt > 1,
+        provider: 'mailcom'
+      });
+
       try {
         if (attempt > 1) {
           diagLogger.info(
             'web_rpa',
             '发起重试',
-            `开始第 ${attempt}/${MAILCOM_MAX_ATTEMPTS} 次无痕会话尝试 (已耗时: ${formatDuration(Date.now() - startTime)})`,
-            { attempt, maxAttempts: MAILCOM_MAX_ATTEMPTS, proxy: proxy.server ?? '直连' },
+            `开始第 ${attempt}/${MAILCOM_MAX_ATTEMPTS} 次无痕会话尝试 (已耗时: ${formatDuration(Date.now() - startTime)}, 代理: ${currentProxy.proxyName || currentProxy.server || '直连'})`,
+            { attempt, maxAttempts: MAILCOM_MAX_ATTEMPTS, proxy: currentProxy.server ?? '直连' },
             email,
             traceId
           );
         }
 
-        return await fetchMailComSingleSession(
+        const res = await fetchMailComSingleSession(
           browser,
           account,
           email,
@@ -2808,11 +2882,24 @@ export async function fetchMailComAccount(
           attempt,
           MAILCOM_MAX_ATTEMPTS,
           traceId,
-          proxy,
+          currentProxy,
           overallDeadline,
           startTime
         );
+
+        if (currentProxy.source === 'direct') {
+          proxyService.reportDirectSuccess();
+          proxyService.recordDirectRequest(350 * 1024);
+        }
+
+        return res;
       } catch (error) {
+        if (currentProxy.source === 'direct') {
+          const is403 = error instanceof InboxMateError && (error.code === 'PROXY_BLOCKED' || error.message.includes('403'));
+          if (is403) {
+            proxyService.reportDirect403();
+          }
+        }
         if (options.signal.aborted) throw new InboxMateError('CANCELLED');
 
         const shouldRetry =
@@ -2824,7 +2911,9 @@ export async function fetchMailComAccount(
           throw error;
         }
 
-        const backoffBase = MAILCOM_RETRY_BASE_DELAY_MS * (2 ** (attempt - 1));
+        const isBlocked = error instanceof InboxMateError && error.code === 'PROXY_BLOCKED';
+        const baseDelay = isBlocked ? 2_500 : MAILCOM_RETRY_BASE_DELAY_MS;
+        const backoffBase = baseDelay * (2 ** (attempt - 1));
         const jitter = Math.floor(Math.random() * MAILCOM_RETRY_MAX_JITTER_MS);
         const retryDelay = Math.min(
           backoffBase + jitter,

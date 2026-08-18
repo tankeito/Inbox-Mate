@@ -169,7 +169,7 @@ export class JobManager {
         input: account,
         snapshot: {
           clientAccountId: account.clientAccountId,
-          email: maskEmail(account.email),
+          email: account.email,
           provider: account.provider,
           state: 'pending',
           customHost: account.customHost,
@@ -222,12 +222,19 @@ export class JobManager {
 
     try {
       await Promise.all(
-        job.accounts.map((account) => {
-          if (!account.input) return Promise.resolve();
+        job.accounts.map(async (account, index) => {
+          if (!account.input) return;
           const engineType = routeAccountEngine(account.input);
           if (engineType === 'web_rpa') {
             const timeoutMs = resolveRpaAccountTimeoutMs(account.input.provider, this.rpaTimeoutMs);
-            return this.rpaLimit(() => this.executeAccount(job, account, input, timeoutMs));
+            return this.rpaLimit(async () => {
+              // Add a gentle stagger for batch executions (300ms ~ 800ms) to prevent burst collisions on the same target IP
+              if (index > 0 && job.accounts.length > 1 && !job.controller.signal.aborted) {
+                const staggerMs = Math.min(index * 250, 1500) + Math.floor(Math.random() * 200);
+                await new Promise<void>((r) => setTimeout(r, staggerMs));
+              }
+              return this.executeAccount(job, account, input, timeoutMs);
+            });
           }
           const provider = account.snapshot.provider;
           const limit = this.getProviderLimit(provider);

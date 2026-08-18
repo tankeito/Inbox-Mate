@@ -25,7 +25,9 @@ if (!existsSync(DATA_DIR)) {
   mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const DB_PATH = path.join(DATA_DIR, 'inbox_mate.db');
+const isTestEnv = process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
+const dbFileName = isTestEnv ? 'inbox_mate_test.db' : 'inbox_mate.db';
+const DB_PATH = path.join(DATA_DIR, dbFileName);
 
 export function hashPassword(password: string, salt?: string): { hash: string; salt: string } {
   const actualSalt = salt || randomBytes(16).toString('hex');
@@ -89,6 +91,9 @@ class DatabaseService {
         message_count INTEGER NOT NULL DEFAULT 0,
         token_id TEXT,
         token TEXT,
+        proxy_name TEXT,
+        proxy_server TEXT,
+        network_mode TEXT DEFAULT 'direct',
         created_at TEXT NOT NULL
       );
 
@@ -143,6 +148,18 @@ class DatabaseService {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS blocked_ips (
+        id TEXT PRIMARY KEY,
+        ip TEXT UNIQUE NOT NULL,
+        reason TEXT NOT NULL,
+        blocked_by TEXT DEFAULT 'admin',
+        created_at TEXT NOT NULL,
+        expires_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_blocked_ips_ip ON blocked_ips(ip);
+      CREATE INDEX IF NOT EXISTS idx_blocked_ips_created_at ON blocked_ips(created_at DESC);
+
       CREATE TABLE IF NOT EXISTS ip_bans (
         id TEXT PRIMARY KEY,
         ip TEXT UNIQUE NOT NULL,
@@ -174,6 +191,47 @@ class DatabaseService {
 
       CREATE INDEX IF NOT EXISTS idx_access_tokens_token ON access_tokens(token);
       CREATE INDEX IF NOT EXISTS idx_access_tokens_active ON access_tokens(is_active);
+
+      CREATE TABLE IF NOT EXISTS proxy_nodes (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        server TEXT NOT NULL,
+        protocol TEXT NOT NULL DEFAULT 'http',
+        is_active INTEGER NOT NULL DEFAULT 1,
+        weight INTEGER NOT NULL DEFAULT 1,
+        latency_ms INTEGER NOT NULL DEFAULT -1,
+        exit_ip TEXT,
+        exit_region TEXT,
+        last_checked_at TEXT,
+        last_status TEXT NOT NULL DEFAULT 'untested',
+        last_error TEXT,
+        total_requests INTEGER NOT NULL DEFAULT 0,
+        success_requests INTEGER NOT NULL DEFAULT 0,
+        total_bytes INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_proxy_nodes_active ON proxy_nodes(is_active);
+      CREATE INDEX IF NOT EXISTS idx_proxy_nodes_status ON proxy_nodes(last_status);
+
+      CREATE TABLE IF NOT EXISTS proxy_traffic_logs (
+        id TEXT PRIMARY KEY,
+        proxy_id TEXT,
+        proxy_name TEXT,
+        proxy_server TEXT,
+        trace_id TEXT,
+        email_account TEXT,
+        bytes_sent INTEGER NOT NULL DEFAULT 0,
+        bytes_received INTEGER NOT NULL DEFAULT 0,
+        total_bytes INTEGER NOT NULL DEFAULT 0,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_traffic_logs_proxy_id ON proxy_traffic_logs(proxy_id);
+      CREATE INDEX IF NOT EXISTS idx_traffic_logs_created_at ON proxy_traffic_logs(created_at DESC);
     `);
 
     // Column migrations
@@ -184,6 +242,15 @@ class DatabaseService {
       }
       if (!usageColumns.includes('token')) {
         this.db.exec('ALTER TABLE usage_logs ADD COLUMN token TEXT;');
+      }
+      if (!usageColumns.includes('proxy_name')) {
+        this.db.exec('ALTER TABLE usage_logs ADD COLUMN proxy_name TEXT;');
+      }
+      if (!usageColumns.includes('proxy_server')) {
+        this.db.exec('ALTER TABLE usage_logs ADD COLUMN proxy_server TEXT;');
+      }
+      if (!usageColumns.includes('network_mode')) {
+        this.db.exec("ALTER TABLE usage_logs ADD COLUMN network_mode TEXT DEFAULT 'direct';");
       }
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_usage_logs_token_id ON usage_logs(token_id);');
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_usage_logs_token ON usage_logs(token);');
@@ -216,7 +283,7 @@ class DatabaseService {
       const { hash, salt } = hashPassword(defaultPass);
       const now = new Date().toISOString();
       const insertStmt = this.db.prepare(`
-        INSERT INTO admin_users (id, email, password_hash, password_salt, two_factor_enabled, created_at, updated_at)
+        INSERT OR IGNORE INTO admin_users (id, email, password_hash, password_salt, two_factor_enabled, created_at, updated_at)
         VALUES (?, ?, ?, ?, 0, ?, ?)
       `);
       insertStmt.run(randomBytes(16).toString('hex'), defaultEmail, hash, salt, now, now);

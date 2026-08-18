@@ -20,6 +20,9 @@ export interface UsageLogItem {
   extractedCode?: string;
   durationMs: number;
   messageCount: number;
+  proxyName?: string;
+  proxyServer?: string;
+  networkMode?: 'proxy' | 'direct';
   createdAt: string;
 }
 
@@ -228,4 +231,73 @@ export interface TokenLogsResponse {
   pageSize: number;
   totalPages: number;
   stats?: TokenLogsStats;
+}
+
+export type ProxyProtocol = 'http' | 'https' | 'socks5';
+export type ProxyStrategy = 'round_robin' | 'latency_first' | 'random';
+export type ProxyRoutingMode = 'direct_first' | 'always' | 'targeted';
+export type ProxyStatus = 'ok' | 'error' | 'untested';
+
+export interface ProxyNode {
+  id: string;
+  name: string;
+  server: string;
+  protocol: ProxyProtocol;
+  isActive: boolean;
+  weight: number;
+  latencyMs: number;
+  exitIp: string | null;
+  exitRegion: string | null;
+  lastCheckedAt: string | null;
+  lastStatus: ProxyStatus;
+  lastError: string | null;
+  totalRequests: number;
+  successRequests: number;
+  totalBytes: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GlobalProxyConfig {
+  enabled: boolean;
+  strategy: ProxyStrategy;
+  routingMode: ProxyRoutingMode;
+  failoverEnabled: boolean;
+  directCooldownUntil?: string | null;
+  isDirectCooling?: boolean;
+}
+
+export interface ProxyTrafficSummary {
+  totalBytes: number;
+  todayBytes: number;
+  totalRequests: number;
+  todayRequests: number;
+  directRequests: number;
+  savedBytesEst: number;
+  savedRatioPercent: number;
+  activeNodes: number;
+  totalNodes: number;
+  healthyNodes: number;
+  avgLatencyMs: number;
+}
+
+export interface ProxyConfigResponse {
+  config: GlobalProxyConfig;
+  nodes: ProxyNode[];
+  summary: ProxyTrafficSummary;
+}
+
+export interface ProxyTrafficLogItem {
+  id: string;
+  proxyId: string;
+  proxyName: string;
+  proxyServer: string;
+  traceId?: string;
+  emailAccount?: string;
+  bytesSent: number;
+  bytesReceived: number;
+  totalBytes: number;
+  durationMs: number;
+  status: string;
+  createdAt: string;
 }

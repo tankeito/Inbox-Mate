@@ -12,8 +12,8 @@
     "setup:browser": "npx playwright install chromium",
     "build": "tsc --noEmit && vite build",
     "start": "tsx src/server/index.ts",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run --fileParallelism=false",
+    "test:watch": "vitest --fileParallelism=false"
   },
   "engines": {
     "node": ">=20"

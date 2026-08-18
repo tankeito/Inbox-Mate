@@ -43,7 +43,7 @@ class DiagnosticLoggerService {
     try {
       const id = randomUUID();
       const now = new Date().toISOString();
-      const maskedEmail = event.accountEmail ? maskEmail(event.accountEmail) : undefined;
+      const rawEmail = event.accountEmail ? event.accountEmail.trim() : undefined;
       const detailsStr =
         typeof event.details === 'object'
           ? JSON.stringify(event.details)
@@ -61,7 +61,7 @@ class DiagnosticLoggerService {
         now,
         event.level,
         event.engine,
-        maskedEmail || null,
+        rawEmail || null,
         event.stage,
         event.message,
         detailsStr,

@@ -347,15 +347,37 @@ export const UsageLogsView: React.FC = () => {
     }
   };
 
-  const renderSourceBadge = (mode: string) => {
-    switch (mode) {
-      case 'api_key':
-        return <span className="by-badge by-badge-purple">API 自动化</span>;
-      case 'batch':
-        return <span className="by-badge by-badge-info">批量队列</span>;
-      default:
-        return <span className="by-badge by-badge-neutral">单账号</span>;
-    }
+  const renderSourceBadge = (item: UsageLogItem) => {
+    const mode = item.sourceMode;
+    const isProxy = item.networkMode === 'proxy' || Boolean(item.proxyName);
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px' }}>
+        {mode === 'api_key' ? (
+          <span className="by-badge by-badge-purple">API 自动化</span>
+        ) : mode === 'batch' ? (
+          <span className="by-badge by-badge-info">批量队列</span>
+        ) : (
+          <span className="by-badge by-badge-neutral">单账号</span>
+        )}
+        {isProxy ? (
+          <span
+            className="by-badge by-badge-cyan"
+            style={{ fontSize: '0.68rem', padding: '1px 5px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+            title={item.proxyName ? `通过代理节点 [${item.proxyName}] 访问` : '通过商业代理池访问'}
+          >
+            <Globe size={10} /> 代理: {item.proxyName || '代理池'}
+          </span>
+        ) : (
+          <span
+            className="by-badge"
+            style={{ fontSize: '0.68rem', padding: '1px 5px', display: 'inline-flex', alignItems: 'center', gap: '3px', background: 'rgba(255,255,255,0.06)', color: 'var(--by-text-muted)' }}
+            title="宿主机房原生网络直连 (0 代理流量)"
+          >
+            <Zap size={10} /> 机房直连
+          </span>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -473,7 +495,7 @@ export const UsageLogsView: React.FC = () => {
               <tr>
                 <th>请求时间</th>
                 <th>客户端 IP & 地区</th>
-                <th>邮箱账号 (脱敏)</th>
+                <th>邮箱账号</th>
                 <th>服务商</th>
                 <th>调用模式</th>
                 <th>执行状态</th>
@@ -525,7 +547,7 @@ export const UsageLogsView: React.FC = () => {
                     </td>
 
                     <td data-label="调用模式">
-                      {renderSourceBadge(item.sourceMode)}
+                      {renderSourceBadge(item)}
                     </td>
 
                     <td data-label="执行状态">
@@ -715,10 +737,19 @@ export const UsageLogsView: React.FC = () => {
                         color: 'var(--by-text-muted)',
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
-                        textOverflow: 'ellipsis'
+                        textOverflow: 'ellipsis',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px'
                       }}
                     >
-                      调用模式: {selectedLog.sourceMode === 'api_key' ? 'API Key 调度' : selectedLog.sourceMode === 'batch' ? '批量队列' : '单账号抓取'}
+                      <span>模式: {selectedLog.sourceMode === 'api_key' ? 'API 自动化' : selectedLog.sourceMode === 'batch' ? '批量队列' : '单账号'}</span>
+                      <span>•</span>
+                      {selectedLog.proxyName || selectedLog.networkMode === 'proxy' ? (
+                        <span style={{ color: 'var(--by-cyan)', fontWeight: 600 }}>🌐 代理: {selectedLog.proxyName || '代理池'}</span>
+                      ) : (
+                        <span style={{ color: 'var(--by-text-muted)' }}>⚡ 直连</span>
+                      )}
                     </span>
                   </div>
 

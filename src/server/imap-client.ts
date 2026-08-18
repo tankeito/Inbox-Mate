@@ -98,6 +98,7 @@ export interface FetchAccountResult {
 
 import { routeAccountEngine } from './engine-router.js';
 import { fetchAccountVerificationCodeViaWebRpa } from './engines/web-rpa-engine.js';
+import { proxyService } from './services/proxy-service.js';
 
 export async function fetchAccountVerificationCode(account: AccountInput, options: FetchAccountOptions): Promise<FetchAccountResult> {
   const engineType = routeAccountEngine(account);
@@ -130,11 +131,14 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
     const auth = credentialsFor(account, options.resolveMicrosoftAccessToken);
     if (options.signal.aborted) throw new InboxMateError('CANCELLED');
 
+    const activeProxy = proxyService.acquireProxy({ isRetry: false, provider: account.provider });
+
     client = new ImapFlow({
       host,
       port,
       secure: true,
       servername: host,
+      proxy: activeProxy?.server,
       tls: {
         rejectUnauthorized: false,
         minVersion: 'TLSv1.2'

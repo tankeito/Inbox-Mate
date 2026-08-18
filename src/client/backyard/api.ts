@@ -11,7 +11,12 @@ import type {
   TokenSummaryStats,
   TokenLogsResponse,
   SystemSettingsPayload,
-  SystemConcurrencySettings
+  SystemConcurrencySettings,
+  ProxyConfigResponse,
+  GlobalProxyConfig,
+  ProxyTrafficSummary,
+  ProxyNode,
+  ProxyTrafficLogItem
 } from './types';
 
 const BASE_URL = '/api/backyard';
@@ -374,5 +379,64 @@ export const backyardApi = {
     return request<{ ok: boolean; message: string; settings: SystemConcurrencySettings; payload: SystemSettingsPayload }>('/settings/system/reset', {
       method: 'POST'
     });
+  },
+
+  // Proxy Network & Traffic Pool
+  async getProxyConfig() {
+    return request<ProxyConfigResponse>('/proxy/config');
+  },
+
+  async updateProxyConfig(payload: Partial<GlobalProxyConfig>) {
+    return request<{ ok: boolean; message: string; config: GlobalProxyConfig; summary: ProxyTrafficSummary }>('/proxy/config', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async addProxyNode(payload: { name?: string; server?: string; protocol?: string; isActive?: boolean; weight?: number; batchText?: string; defaultProtocol?: string }) {
+    return request<{ ok: boolean; message: string; node?: ProxyNode; imported?: number; errors?: string[]; nodes: ProxyNode[]; summary: ProxyTrafficSummary }>('/proxy/nodes', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async updateProxyNode(id: string, payload: Partial<ProxyNode>) {
+    return request<{ ok: boolean; message: string; node: ProxyNode; summary: ProxyTrafficSummary }>(`/proxy/nodes/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async deleteProxyNode(id: string) {
+    return request<{ ok: boolean; message: string; summary: ProxyTrafficSummary }>(`/proxy/nodes/${id}`, {
+      method: 'DELETE'
+    });
+  },
+
+  async testProxyNode(id: string) {
+    return request<{ ok: boolean; result: { success: boolean; latencyMs: number; exitIp?: string; exitRegion?: string; error?: string }; node: ProxyNode }>(`/proxy/nodes/${id}/test`, {
+      method: 'POST'
+    });
+  },
+
+  async testRawProxy(server: string) {
+    return request<{ ok: boolean; parsed: any; result: { success: boolean; latencyMs: number; exitIp?: string; exitRegion?: string; error?: string } }>('/proxy/test-raw', {
+      method: 'POST',
+      body: JSON.stringify({ server })
+    });
+  },
+
+  async testAllProxyNodes() {
+    return request<{ ok: boolean; message: string; results: any[]; nodes: ProxyNode[]; summary: ProxyTrafficSummary }>('/proxy/test-all', {
+      method: 'POST'
+    });
+  },
+
+  async getProxyTraffic(params?: { page?: number; pageSize?: number; proxyId?: string }) {
+    const searchParams = new URLSearchParams();
+    if (params?.page) searchParams.set('page', params.page.toString());
+    if (params?.pageSize) searchParams.set('pageSize', params.pageSize.toString());
+    if (params?.proxyId) searchParams.set('proxyId', params.proxyId);
+    return request<{ items: ProxyTrafficLogItem[]; total: number; page: number; pageSize: number; totalPages: number; summary: ProxyTrafficSummary }>(`/proxy/traffic?${searchParams.toString()}`);
   }
 };
