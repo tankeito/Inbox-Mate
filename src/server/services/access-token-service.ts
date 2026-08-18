@@ -344,8 +344,8 @@ export class AccessTokenService {
     const statsStmt = db.prepare(`
       SELECT 
         COUNT(*) as totalCalls,
-        SUM(CASE WHEN status = 'success' OR has_code = 1 THEN 1 ELSE 0 END) as successCalls,
-        SUM(CASE WHEN status != 'success' AND has_code = 0 THEN 1 ELSE 0 END) as errorCalls
+        SUM(CASE WHEN status IN ('success', 'no_code') OR has_code = 1 THEN 1 ELSE 0 END) as successCalls,
+        SUM(CASE WHEN status NOT IN ('success', 'no_code') AND (has_code = 0 OR has_code IS NULL) THEN 1 ELSE 0 END) as errorCalls
       FROM usage_logs ${baseWhereClause}
     `);
     const statsRes = statsStmt.get(...baseArgs) as any;
@@ -357,16 +357,16 @@ export class AccessTokenService {
 
     // 2. Filtered list query
     const page = Math.max(1, params?.page || 1);
-    const pageSize = Math.max(1, Math.min(100, params?.pageSize || 10));
+    const pageSize = Math.max(1, Math.min(100, params?.pageSize || 8));
     const offset = (page - 1) * pageSize;
 
     const conditions: string[] = [...baseConditions];
     const args: any[] = [...baseArgs];
 
     if (params?.status === 'success') {
-      conditions.push("(status = 'success' OR has_code = 1)");
+      conditions.push("(status IN ('success', 'no_code') OR has_code = 1)");
     } else if (params?.status === 'error') {
-      conditions.push("(status != 'success' AND has_code = 0)");
+      conditions.push("(status NOT IN ('success', 'no_code') AND (has_code = 0 OR has_code IS NULL))");
     }
 
     const whereClause = `WHERE ${conditions.join(' AND ')}`;

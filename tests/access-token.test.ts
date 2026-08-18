@@ -151,7 +151,7 @@ describe('Access Token Service & Quota Management', () => {
       totalQuota: 20
     });
 
-    // Record 1 success
+    // Record 1 success (with code)
     usageLogger.record({
       clientIp: '192.168.1.100',
       region: '北京市',
@@ -163,6 +163,22 @@ describe('Access Token Service & Quota Management', () => {
       extractedCode: '884821',
       durationMs: 3200,
       messageCount: 5,
+      tokenId: token.id,
+      token: token.token
+    });
+
+    // Record 1 success (no_code / 邮件获取)
+    usageLogger.record({
+      clientIp: '192.168.1.102',
+      region: '广州市',
+      emailAccount: 'tester3@mail.com',
+      provider: 'mailcom',
+      sourceMode: 'api_key',
+      status: 'no_code',
+      hasCode: false,
+      extractedCode: undefined,
+      durationMs: 2800,
+      messageCount: 3,
       tokenId: token.id,
       token: token.token
     });
@@ -184,23 +200,23 @@ describe('Access Token Service & Quota Management', () => {
       token: token.token
     });
 
-    // Query all
+    // Query all (3 total)
     const allLogs = accessTokenService.getTokenLogs(token.id, { status: 'all' });
     expect(allLogs).toBeDefined();
-    expect(allLogs.total).toBe(2);
-    expect(allLogs.stats.totalCalls).toBe(2);
-    expect(allLogs.stats.successCalls).toBe(1);
+    expect(allLogs.total).toBe(3);
+    expect(allLogs.stats.totalCalls).toBe(3);
+    expect(allLogs.stats.successCalls).toBe(2); // success + no_code
     expect(allLogs.stats.errorCalls).toBe(1);
-    expect(allLogs.stats.successRate).toBe(50);
+    expect(allLogs.stats.successRate).toBe(66.7);
     expect(allLogs.stats.freeProtectionCount).toBe(1);
 
-    // Query success only
+    // Query success only (2 items: success + no_code)
     const successLogs = accessTokenService.getTokenLogs(token.id, { status: 'success' });
-    expect(successLogs.total).toBe(1);
-    expect(successLogs.items[0].status).toBe('success');
-    expect(successLogs.items[0].extractedCode).toBe('884821');
+    expect(successLogs.total).toBe(2);
+    expect(successLogs.items.map((i) => i.status)).toContain('success');
+    expect(successLogs.items.map((i) => i.status)).toContain('no_code');
 
-    // Query error only
+    // Query error only (1 item: error, no_code MUST NOT be here)
     const errorLogs = accessTokenService.getTokenLogs(token.id, { status: 'error' });
     expect(errorLogs.total).toBe(1);
     expect(errorLogs.items[0].status).toBe('error');
