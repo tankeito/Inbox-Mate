@@ -298,6 +298,15 @@ async function getSharedBrowser(): Promise<Browser> {
           '--disable-blink-features=AutomationControlled',
           '--no-sandbox',
           '--disable-setuid-sandbox',
+          '--disable-gpu',
+          '--disable-dev-shm-usage',
+          '--disable-extensions',
+          '--blink-settings=imagesEnabled=false',
+          '--disable-background-networking',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--no-first-run',
+          '--mute-audio',
           '--disable-infobars',
           ...(process.platform === 'linux' ? ['--disable-dev-shm-usage'] : [])
         ]
@@ -619,7 +628,9 @@ export function isMailComBlockedContent(content: string, url = ''): boolean {
     normalizedContent.includes('access denied') ||
     normalizedContent.includes('request blocked') ||
     normalizedUrl.includes('error=blocked') ||
-    normalizedUrl.includes('error=403')
+    normalizedUrl.includes('error=403') ||
+    normalizedUrl.startsWith('chrome-error:') ||
+    normalizedUrl.includes('chromewebdata')
   );
 }
 
@@ -717,6 +728,19 @@ export async function ensureMailComLoginFormVisible(
   const passwordInput = page.locator('#login-password');
   if (await loginFieldsAreVisible(emailInput, passwordInput)) return { emailInput, passwordInput };
 
+  // If on consent page or privacy banner is present, auto-accept immediately
+  const currentUrl = typeof page.url === 'function' ? page.url() : '';
+  if (currentUrl.includes('consent') || currentUrl.includes('privacy')) {
+    const consentBtn = page.locator('button.privacy-btn, #save-all-conditionally-button, button:has-text("Continue to Mail.com"), button:has-text("Accept")').filter({ visible: true }).first();
+    if ((await consentBtn.count().catch(() => 0)) > 0) {
+      await Promise.all([
+        typeof page.waitForURL === 'function' ? page.waitForURL((u) => !u.toString().includes('consentpage'), { timeout: 15000 }).catch(() => {}) : Promise.resolve(),
+        consentBtn.click({ timeout: 4000 }).catch(() => {})
+      ]);
+      await page.waitForTimeout(300);
+    }
+  }
+
   const loginTrigger = page.locator(MAIL_COM_LOGIN_TRIGGER_SELECTOR).filter({ visible: true }).first();
   await loginTrigger.waitFor({ state: 'visible', timeout: 10_000 });
 
@@ -805,53 +829,53 @@ async function findWebmailerFrame(page: Page, timeoutMs: number): Promise<Frame 
 }
 
 export async function tryAutoSkipInterstitials(page: Page): Promise<boolean> {
-  const skipSelectors = [
-    '#save-all-conditionally-button',
-    'button.privacy-btn',
-    'a:has-text("Continue to Mail")',
-    'a:has-text("Continue to mailbox")',
-    'a:has-text("Continue to Inbox")',
-    'a:has-text("Continue")',
-    'button:has-text("Continue to Mail")',
-    'button:has-text("Continue to mailbox")',
-    'button:has-text("Continue to Inbox")',
-    'button:has-text("Continue")',
-    'a:has-text("Remind me later")',
-    'button:has-text("Remind me later")',
-    'button:has-text("Skip")',
-    'a:has-text("Skip")',
-    'button:has-text("I agree")',
-    'button:has-text("Accept all")',
-    'button:has-text("Agree and continue")',
-    'button#onetrust-accept-btn-handler',
-    '[data-test="skip-button"]',
-    '[data-test="continue-button"]',
-    'a.pos-button',
-    'button.pos-button',
-    '.consent-accept',
-    '.interstitial-skip',
-    'button.btn-secondary',
-    'a.btn-secondary'
-  ];
-  for (const sel of skipSelectors) {
-    try {
-      const btn = page.locator(sel).filter({ visible: true }).first();
-      if ((await btn.count().catch(() => 0)) > 0) {
-        await btn.click({ timeout: 1200 }).catch(() => {});
-        return true;
-      }
-    } catch {}
-    for (const frame of page.frames()) {
-      try {
-        const btn = frame.locator(sel).filter({ visible: true }).first();
-        if ((await btn.count().catch(() => 0)) > 0) {
-          await btn.click({ timeout: 1200 }).catch(() => {});
+  try {
+    const clicked = await page.evaluate(() => {
+      const selectors = [
+        '#save-all-conditionally-button',
+        'button.privacy-btn',
+        'a.pos-button',
+        'button.pos-button',
+        '.consent-accept',
+        '.interstitial-skip',
+        'button#onetrust-accept-btn-handler',
+        '[data-test="skip-button"]',
+        '[data-test="continue-button"]'
+      ];
+      for (const s of selectors) {
+        const el = document.querySelector(s) as HTMLElement | null;
+        if (el && el.offsetParent !== null) {
+          el.click();
           return true;
         }
-      } catch {}
-    }
+      }
+      const buttons = Array.from(document.querySelectorAll('button, a')) as HTMLElement[];
+      for (const b of buttons) {
+        const text = (b.textContent || '').trim().toLowerCase();
+        if (
+          text === 'continue to mail' ||
+          text === 'continue to mailbox' ||
+          text === 'continue to inbox' ||
+          text === 'remind me later' ||
+          text === 'skip' ||
+          text === 'accept all' ||
+          text === 'i agree' ||
+          text === 'agree and continue' ||
+          text.includes('remind me later') ||
+          text.includes('continue to mail')
+        ) {
+          if (b.offsetParent !== null) {
+            b.click();
+            return true;
+          }
+        }
+      }
+      return false;
+    });
+    return !!clicked;
+  } catch {
+    return false;
   }
-  return false;
 }
 
 async function captureForensicsSnapshot(page: Page | null, stage: string): Promise<{
@@ -1020,12 +1044,12 @@ async function hydrateMailBodies(
     );
   }
 
-  // Fallback for any mails that didn't resolve via fast API path
+  // Fallback for any mails that didn't resolve via fast API path (limit to top 3 newest to save proxy time)
   const remainingMails = mails.filter((m) => !m.htmlBody && !m.body);
   if (remainingMails.length === 0 || !frame || signal.aborted) return;
 
-  const deadline = Date.now() + 15_000;
-  for (const mail of remainingMails) {
+  const deadline = Date.now() + 6_000;
+  for (const mail of remainingMails.slice(0, 3)) {
     if (signal.aborted || Date.now() >= deadline || !/^\d+$/.test(mail.id)) break;
 
     const item = frame.locator(`[id="id${mail.id}"]`);
@@ -2541,9 +2565,10 @@ async function fetchMailComSingleSession(
     await page.route('**/*', (route) => {
       const request = route.request();
       const resourceType = request.resourceType();
+      const url = request.url().toLowerCase();
       let hostname = '';
       try {
-        hostname = new URL(request.url()).hostname.toLowerCase();
+        hostname = new URL(url).hostname.toLowerCase();
       } catch {
         return route.continue().catch(() => {});
       }
@@ -2563,24 +2588,31 @@ async function fetchMailComSingleSession(
         return route.abort().catch(() => {});
       }
 
-      // Block known 3rd-party ad networks and telemetry
-      if (!isFirstParty) {
-        if (
-          hostname.includes('google-analytics') ||
-          hostname.includes('googletagmanager') ||
-          hostname.includes('doubleclick') ||
-          hostname.includes('criteo') ||
-          hostname.includes('outbrain') ||
-          hostname.includes('taboola') ||
-          hostname.includes('quantserve') ||
-          hostname.includes('scorecardresearch') ||
-          hostname.includes('adnxs') ||
-          hostname.includes('facebook') ||
-          hostname.includes('tiktok') ||
-          hostname.includes('statcounter')
-        ) {
-          return route.abort().catch(() => {});
-        }
+      // Block known 3rd-party ad networks, telemetry, and tracking SDKs
+      if (
+        hostname.includes('google-analytics') ||
+        hostname.includes('googletagmanager') ||
+        hostname.includes('doubleclick') ||
+        hostname.includes('criteo') ||
+        url.includes('outbrain') ||
+        url.includes('taboola') ||
+        url.includes('edroll') ||
+        url.includes('adservice') ||
+        url.includes('adition') ||
+        url.includes('rubiconproject') ||
+        url.includes('pubmatic') ||
+        url.includes('adnxs') ||
+        url.includes('casalemedia') ||
+        url.includes('quantserve') ||
+        url.includes('scorecardresearch') ||
+        url.includes('facebook') ||
+        url.includes('tiktok') ||
+        url.includes('statcounter') ||
+        url.includes('tcf-api.js') ||
+        url.includes('tamago.js') ||
+        url.includes('logic_pbjs')
+      ) {
+        return route.abort().catch(() => {});
       }
 
       return route.continue().catch(() => {});
@@ -2655,6 +2687,18 @@ async function fetchMailComSingleSession(
       }
     });
 
+    page.on('requestfailed', (req) => {
+      const failUrl = req.url().toLowerCase();
+      const failError = req.failure()?.errorText || '';
+      if (
+        (failUrl.includes('/login') || failUrl.includes('/mail') || failUrl.includes('navigator')) &&
+        (failError.includes('ERR_TUNNEL') || failError.includes('ERR_EMPTY_RESPONSE') || failError.includes('ERR_CONNECTION') || failError.includes('ERR_TIMED_OUT'))
+      ) {
+        loginBlocked = true;
+        blockedReason = failError;
+      }
+    });
+
     options.onProgress('connecting');
     stage = '打开 Mail.com';
     diagLogger.debug('web_rpa', stage, `正在导航到 Mail.com 首页 (耗时: ${formatDuration(Date.now() - startTime)})`, { url: MAIL_COM_HOME }, email, traceId);
@@ -2689,10 +2733,10 @@ async function fetchMailComSingleSession(
     const { emailInput, passwordInput } = await ensureMailComLoginFormVisible(page);
 
     stage = '填写账号密码';
-    await humanType(emailInput, email, Math.floor(Math.random() * 20 + 25));
-    await page.waitForTimeout(Math.floor(Math.random() * 150 + 100));
-    await humanType(passwordInput, password, Math.floor(Math.random() * 25 + 30));
-    await page.waitForTimeout(Math.floor(Math.random() * 200 + 150));
+    await humanType(emailInput, email, Math.floor(Math.random() * 5 + 8));
+    await page.waitForTimeout(Math.floor(Math.random() * 30 + 20));
+    await humanType(passwordInput, password, Math.floor(Math.random() * 5 + 8));
+    await page.waitForTimeout(Math.floor(Math.random() * 40 + 30));
 
     options.onProgress('searching');
     stage = '提交登录';
@@ -2723,12 +2767,12 @@ async function fetchMailComSingleSession(
       const remaining = deadline - Date.now();
       const loaded = await Promise.race([
         mailListPromise.then(() => true),
-        page.waitForTimeout(Math.min(1000, remaining)).then(() => false)
+        page.waitForTimeout(Math.min(200, remaining)).then(() => false)
       ]);
       if (loaded || mailListSeen) break;
 
-      // Auto-skip interstitials / promos / consent every 1.5s
-      if (Date.now() - lastSkipAttempt > 1500) {
+      // Auto-skip interstitials / promos / consent every 1s
+      if (Date.now() - lastSkipAttempt > 1000) {
         lastSkipAttempt = Date.now();
         await tryAutoSkipInterstitials(page);
       }
