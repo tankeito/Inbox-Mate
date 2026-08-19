@@ -24,6 +24,7 @@ import { proxyService } from '../services/proxy-service.js';
 import { domainFromEmail, isOffiLiveDomain } from '../providers.js';
 
 const MAIL_COM_HOME = 'https://www.mail.com';
+const MAIL_COM_LOGIN = 'https://login.mail.com/login';
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const MAIL_LIST_TIMEOUT_MS = 45_000;
 const BODY_FETCH_BUDGET_MS = 30_000;
@@ -68,7 +69,7 @@ export const MAIL_COM_LOGIN_TRIGGER_SELECTOR = [
   '#login-button'
 ].join(', ');
 export const MAILCOM_MAX_ATTEMPTS = 3;
-export const MAILCOM_TOTAL_BUDGET_MS = 65_000;
+export const MAILCOM_TOTAL_BUDGET_MS = 120_000;
 export const MAILCOM_RETRY_BASE_DELAY_MS = 1_500;
 export const MAILCOM_RETRY_MAX_JITTER_MS = 1_000;
 export const MAILCOM_MIN_REMAINING_BUDGET_MS = 8_000;
@@ -82,6 +83,25 @@ export interface ProxyResolution {
   source: 'direct' | 'environment' | 'windows-system' | 'local-port' | 'proxy-pool';
   proxyId?: string;
   proxyName?: string;
+}
+
+export function buildPlaywrightProxyConfig(
+  proxyServer: string | undefined
+): { server: string; username?: string; password?: string } | undefined {
+  if (!proxyServer) return undefined;
+  try {
+    const parsed = new URL(proxyServer);
+    if (parsed.username || parsed.password) {
+      return {
+        server: `${parsed.protocol}//${parsed.host}`,
+        username: decodeURIComponent(parsed.username),
+        password: decodeURIComponent(parsed.password)
+      };
+    }
+    return { server: proxyServer };
+  } catch {
+    return { server: proxyServer };
+  }
 }
 
 export interface CapturedMailPayload {
@@ -422,7 +442,7 @@ export async function testRpaHealthCheck(): Promise<{
 
   const browser = await acquireBrowser();
   const context = await browser.newContext({
-    proxy: proxy.server ? { server: proxy.server } : undefined,
+    proxy: buildPlaywrightProxyConfig(proxy.server),
     viewport: { width: 1280, height: 800 }
   });
 
@@ -784,13 +804,22 @@ async function findWebmailerFrame(page: Page, timeoutMs: number): Promise<Frame 
   return undefined;
 }
 
-async function tryAutoSkipInterstitials(page: Page): Promise<boolean> {
+export async function tryAutoSkipInterstitials(page: Page): Promise<boolean> {
   const skipSelectors = [
+    '#save-all-conditionally-button',
+    'button.privacy-btn',
+    'a:has-text("Continue to Mail")',
+    'a:has-text("Continue to mailbox")',
+    'a:has-text("Continue to Inbox")',
+    'a:has-text("Continue")',
     'button:has-text("Continue to Mail")',
     'button:has-text("Continue to mailbox")',
     'button:has-text("Continue to Inbox")',
-    'button:has-text("Skip")',
+    'button:has-text("Continue")',
+    'a:has-text("Remind me later")',
     'button:has-text("Remind me later")',
+    'button:has-text("Skip")',
+    'a:has-text("Skip")',
     'button:has-text("I agree")',
     'button:has-text("Accept all")',
     'button:has-text("Agree and continue")',
@@ -798,8 +827,11 @@ async function tryAutoSkipInterstitials(page: Page): Promise<boolean> {
     '[data-test="skip-button"]',
     '[data-test="continue-button"]',
     'a.pos-button',
+    'button.pos-button',
     '.consent-accept',
-    '.interstitial-skip'
+    '.interstitial-skip',
+    'button.btn-secondary',
+    'a.btn-secondary'
   ];
   for (const sel of skipSelectors) {
     try {
@@ -808,8 +840,15 @@ async function tryAutoSkipInterstitials(page: Page): Promise<boolean> {
         await btn.click({ timeout: 1200 }).catch(() => {});
         return true;
       }
-    } catch {
-      // ignore
+    } catch {}
+    for (const frame of page.frames()) {
+      try {
+        const btn = frame.locator(sel).filter({ visible: true }).first();
+        if ((await btn.count().catch(() => 0)) > 0) {
+          await btn.click({ timeout: 1200 }).catch(() => {});
+          return true;
+        }
+      } catch {}
     }
   }
   return false;
@@ -1107,7 +1146,7 @@ export function createOffiLiveContextOptions(
   proxyServer?: string
 ): BrowserContextOptions {
   return {
-    proxy: proxyServer ? { server: proxyServer } : undefined,
+    proxy: buildPlaywrightProxyConfig(proxyServer),
     viewport: { width: 1280, height: 800 },
     locale: 'en-US',
     userAgent: createOffiLiveUserAgent(browserVersion),
@@ -2462,7 +2501,7 @@ async function fetchMailComSingleSession(
     );
 
     context = await browser.newContext({
-      proxy: proxy.server ? { server: proxy.server } : undefined,
+      proxy: buildPlaywrightProxyConfig(proxy.server),
       viewport: { width: 1280, height: 800 },
       userAgent:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -2621,6 +2660,20 @@ async function fetchMailComSingleSession(
     diagLogger.debug('web_rpa', stage, `正在导航到 Mail.com 首页 (耗时: ${formatDuration(Date.now() - startTime)})`, { url: MAIL_COM_HOME }, email, traceId);
     await page.goto(MAIL_COM_HOME, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT_MS });
     const initialContent = await page.content().catch(() => '');
+
+    // Auto-accept GDPR / Privacy consent page if landed on consentpage
+    if (page.url().includes('consent') || initialContent.includes('Privacy') || initialContent.includes('Consent')) {
+      const consentBtn = page.locator('button.privacy-btn, #save-all-conditionally-button, button:has-text("Continue to Mail.com"), button:has-text("Accept")').filter({ visible: true }).first();
+      if ((await consentBtn.count().catch(() => 0)) > 0) {
+        diagLogger.info('web_rpa', stage, '检测到海外 GDPR 隐私条款弹窗，自动点击同意并进入首页', { url: page.url() }, email, traceId);
+        await Promise.all([
+          page.waitForURL((u) => !u.toString().includes('consentpage'), { timeout: 15000 }).catch(() => {}),
+          consentBtn.click({ timeout: 4000 }).catch(() => {})
+        ]);
+        await page.waitForTimeout(500);
+      }
+    }
+
     if (isCaptchaPage(initialContent)) {
       const snapshot = await captureForensicsSnapshot(page, stage);
       diagLogger.warn('web_rpa', stage, '首页触发 Cloudflare/验证码阻拦', { ...snapshot, concurrentTasks: activeRunningAccounts }, email, traceId);
@@ -2656,7 +2709,7 @@ async function fetchMailComSingleSession(
     }
 
     stage = '等待收件箱';
-    const singleSessionTimeout = Math.min(25_000, Math.max(5_000, overallDeadline - Date.now() - 2_000));
+    const singleSessionTimeout = Math.min(45_000, Math.max(15_000, overallDeadline - Date.now() - 2_000));
     const deadline = Date.now() + singleSessionTimeout;
     let lastSkipAttempt = 0;
 
@@ -2678,6 +2731,19 @@ async function fetchMailComSingleSession(
       if (Date.now() - lastSkipAttempt > 1500) {
         lastSkipAttempt = Date.now();
         await tryAutoSkipInterstitials(page);
+      }
+
+      // Check DOM items across all frames
+      for (const frame of page.frames()) {
+        const items = frame.locator('list-mail-item, [data-test="mail-item"], .messageListItem');
+        if ((await items.count().catch(() => 0)) > 0) {
+          const domMails = await parseMailboxDom(page).catch(() => []);
+          if (domMails.length > 0) {
+            mergeCapturedMails(capturedMails, domMails);
+            mailListSeen = true;
+            break;
+          }
+        }
       }
 
       const currentUrl = page.url();

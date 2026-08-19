@@ -1120,7 +1120,7 @@ describe('Mail.com 403 / WAF blocked detection and retry policies', () => {
 
   it('maintains expected retry constants for Mail.com RPA lifecycle', () => {
     expect(MAILCOM_MAX_ATTEMPTS).toBe(3);
-    expect(MAILCOM_TOTAL_BUDGET_MS).toBe(65_000);
+    expect(MAILCOM_TOTAL_BUDGET_MS).toBe(120_000);
   });
 });
 
