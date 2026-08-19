@@ -3,7 +3,7 @@ import { simpleParser } from 'mailparser';
 import type { AccountInput, CodeMatch, EmailItem } from '../shared/types.js';
 import { extractVerificationCode } from '../shared/verification-code.js';
 import { InboxMateError, classifyImapError } from './errors.js';
-import { PROVIDER_REGISTRY } from './providers.js';
+import { PROVIDER_REGISTRY, isMailComDomain } from './providers.js';
 import { fetchAccountVerificationCodeViaPop3 } from './pop3-client.js';
 
 const MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -233,7 +233,7 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
     const classified = error instanceof InboxMateError ? error.code : classifyImapError(error, options.signal.aborted);
 
     if (
-      (account.provider === 'mailcom' || account.email.endsWith('cheerful.com') || account.email.endsWith('mail.com')) &&
+      (account.provider === 'mailcom' || isMailComDomain(account.email.split('@')[1])) &&
       (classified === 'AUTH_FAILED' || classified === 'TIMEOUT' || classified === 'CONNECTION_FAILED')
     ) {
       try {

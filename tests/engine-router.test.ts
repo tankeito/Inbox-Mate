@@ -30,6 +30,12 @@ describe('routeAccountEngine', () => {
 
     // Test other Mail.com group domains across categories
     const testDomains = [
+      'metalfan.com',
+      'artlover.com',
+      'bikerider.com',
+      '2trom.com',
+      'bsdmail.com',
+      'linuxmail.org',
       'catlover.com',
       'engineer.com',
       'myself.com',

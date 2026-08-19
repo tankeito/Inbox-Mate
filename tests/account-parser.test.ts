@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { parseAccountText, parseAccountTextSmart, parseAccountLineSmart } from '../src/shared/account-parser';
 
 describe('parseAccountText', () => {
-  it('parses Mail.com subdomain account rozella.hermann@cheerful.com:JZaNPpwbGHnt', () => {
-    const parsed = parseAccountText('rozella.hermann@cheerful.com:JZaNPpwbGHnt');
-    expect(parsed.accounts).toHaveLength(1);
+  it('parses Mail.com subdomain account rozella.hermann@cheerful.com:JZaNPpwbGHnt and leal_estesqaa@metalfan.com:VuAz6eDznoKV', () => {
+    const parsed = parseAccountText('rozella.hermann@cheerful.com:JZaNPpwbGHnt\nleal_estesqaa@metalfan.com:VuAz6eDznoKV');
+    expect(parsed.accounts).toHaveLength(2);
     expect(parsed.accounts[0]).toMatchObject({
       email: 'rozella.hermann@cheerful.com',
       secret: 'JZaNPpwbGHnt',
+      provider: 'mailcom'
+    });
+    expect(parsed.accounts[1]).toMatchObject({
+      email: 'leal_estesqaa@metalfan.com',
+      secret: 'VuAz6eDznoKV',
       provider: 'mailcom'
     });
   });
