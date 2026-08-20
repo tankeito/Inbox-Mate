@@ -164,6 +164,15 @@ export function createServer(port = PORT) {
     const max = Number.parseInt(req.query.max as string) || 10;
     const format = (req.query.format as string) || 'json';
 
+    let scopeParam = (req.query.scope as string || '').toLowerCase();
+    if (!scopeParam && req.query.fields === 'code') scopeParam = 'code_only';
+    const scope = (scopeParam === 'code_only' || scopeParam === 'summary' || scopeParam === 'full') ? scopeParam : undefined;
+
+    let engineParam = (req.query.engine as string || '').toLowerCase();
+    if (engineParam === 'chrome' || engineParam === 'rpa') engineParam = 'web_rpa';
+    if (engineParam === 'imap' || engineParam === 'pop' || engineParam === 'pop3') engineParam = 'imap_pop3';
+    const engine = (engineParam === 'auto' || engineParam === 'web_rpa' || engineParam === 'imap_pop3') ? engineParam : undefined;
+
     // IP Block Check
     const blockStatus = ipBlockService.isIpBlocked(clientIp);
     if (blockStatus.blocked) {
@@ -219,7 +228,9 @@ export function createServer(port = PORT) {
         maxMessages: max,
         clientIp,
         region,
-        token: tokenStr || undefined
+        token: tokenStr || undefined,
+        scope,
+        engine
       });
 
       if (format === 'code' || format === 'text') {

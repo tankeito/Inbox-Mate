@@ -157,6 +157,9 @@ export interface RpaStatusData {
   heapUsedMb: number;
 }
 
+export type ScopeMode = 'code_only' | 'summary' | 'full';
+export type EnginePreference = 'auto' | 'web_rpa' | 'imap_pop3';
+
 export interface AccessTokenItem {
   id: string;
   token: string;
@@ -164,6 +167,8 @@ export interface AccessTokenItem {
   totalQuota: number;
   usedQuota: number;
   remainingQuota: number;
+  scopeMode: ScopeMode;
+  enginePreference: EnginePreference;
   isActive: boolean;
   isExhausted: boolean;
   expiresAt: string | null;

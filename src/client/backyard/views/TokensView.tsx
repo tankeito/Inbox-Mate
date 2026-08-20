@@ -26,10 +26,12 @@ import {
   ShieldCheck,
   CheckCircle,
   XCircle,
-  ListFilter
+  ListFilter,
+  SlidersHorizontal,
+  Sparkles
 } from 'lucide-react';
 import { backyardApi } from '../api';
-import type { AccessTokenItem, TokenSummaryStats, UsageLogItem, TokenLogsStats } from '../types';
+import type { AccessTokenItem, TokenSummaryStats, UsageLogItem, TokenLogsStats, ScopeMode, EnginePreference } from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { formatDuration, formatFullDateTime, type DatePreset } from '../../../shared/format-utils';
 import { DateRangeFilter } from '../components/DateRangeFilter';
@@ -55,7 +57,18 @@ export const TokensView: React.FC = () => {
   const [newName, setNewName] = useState('');
   const [newQuota, setNewQuota] = useState('10');
   const [newDuration, setNewDuration] = useState('0');
+  const [newScopeMode, setNewScopeMode] = useState<ScopeMode>('code_only');
+  const [newEnginePreference, setNewEnginePreference] = useState<EnginePreference>('auto');
   const [createLoading, setCreateLoading] = useState(false);
+
+  // Edit Token Modal
+  const [tokenToEdit, setTokenToEdit] = useState<AccessTokenItem | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editQuota, setEditQuota] = useState('10');
+  const [editDuration, setEditDuration] = useState('0');
+  const [editScopeMode, setEditScopeMode] = useState<ScopeMode>('code_only');
+  const [editEnginePreference, setEditEnginePreference] = useState<EnginePreference>('auto');
+  const [editLoading, setEditLoading] = useState(false);
 
   // Custom TopUp Modal
   const [tokenToTopUp, setTokenToTopUp] = useState<AccessTokenItem | null>(null);
@@ -79,6 +92,14 @@ export const TokensView: React.FC = () => {
   const [tokenLogsActivePreset, setTokenLogsActivePreset] = useState<DatePreset | 'custom' | null>(null);
   const [tokenLogsStatusTab, setTokenLogsStatusTab] = useState<'all' | 'success' | 'error'>('all');
   const [tokenLogsStats, setTokenLogsStats] = useState<TokenLogsStats | null>(null);
+  const [reconcileLoading, setReconcileLoading] = useState(false);
+  const [showReconcileModal, setShowReconcileModal] = useState(false);
+  const [reconcileResult, setReconcileResult] = useState<{
+    token: AccessTokenItem;
+    reconciledCount: number;
+    previousUsedQuota: number;
+    message: string;
+  } | null>(null);
 
   const fetchTokens = async () => {
     try {
@@ -134,12 +155,16 @@ export const TokensView: React.FC = () => {
       const res = await backyardApi.createToken({
         name: newName.trim(),
         totalQuota: quota,
-        durationDays: duration > 0 ? duration : null
+        durationDays: duration > 0 ? duration : null,
+        scopeMode: newScopeMode,
+        enginePreference: newEnginePreference
       });
       setShowCreateModal(false);
       setNewName('');
       setNewQuota('10');
       setNewDuration('0');
+      setNewScopeMode('code_only');
+      setNewEnginePreference('auto');
       setToastMessage({ type: 'success', text: `已成功生成 Token: "${res.token.name}" (额度: ${res.token.totalQuota}次)` });
       fetchTokens();
       setTimeout(() => setToastMessage(null), 5000);
@@ -148,6 +173,84 @@ export const TokensView: React.FC = () => {
     } finally {
       setCreateLoading(false);
     }
+  };
+
+  const handleOpenEdit = (token: AccessTokenItem) => {
+    setTokenToEdit(token);
+    setEditName(token.name);
+    setEditQuota(String(token.totalQuota));
+    setEditScopeMode(token.scopeMode || 'code_only');
+    setEditEnginePreference(token.enginePreference || 'auto');
+    setEditDuration('0');
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tokenToEdit || !editName.trim()) return;
+    setEditLoading(true);
+    try {
+      const quota = Number(editQuota) || tokenToEdit.totalQuota;
+      const duration = Number(editDuration) || 0;
+      const res = await backyardApi.updateToken(tokenToEdit.id, {
+        name: editName.trim(),
+        totalQuota: quota,
+        durationDays: duration > 0 ? duration : null,
+        scopeMode: editScopeMode,
+        enginePreference: editEnginePreference
+      });
+      setTokenToEdit(null);
+      setToastMessage({ type: 'success', text: `已成功更新 Token "${res.token.name}" 的权限与配置` });
+      fetchTokens();
+      setTimeout(() => setToastMessage(null), 4000);
+    } catch (err: any) {
+      setToastMessage({ type: 'error', text: err.message || '更新 Token 失败' });
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
+  const renderScopeBadge = (scope?: ScopeMode) => {
+    if (scope === 'full') {
+      return (
+        <span className="by-badge by-badge-neutral" title="完整报文模式：包含正文与完整 HTML" style={{ fontSize: '0.74rem', padding: '2px 8px' }}>
+          完整报文
+        </span>
+      );
+    }
+    if (scope === 'summary') {
+      return (
+        <span className="by-badge by-badge-info" title="邮件摘要模式：包含主题/发件人/摘要，剔除庞大正文" style={{ fontSize: '0.74rem', padding: '2px 8px' }}>
+          邮件摘要
+        </span>
+      );
+    }
+    return (
+      <span className="by-badge by-badge-success" title="仅提取验证码：报文极致精简，不返回正文" style={{ fontSize: '0.74rem', padding: '2px 8px' }}>
+        仅验证码
+      </span>
+    );
+  };
+
+  const renderEngineBadge = (engine?: EnginePreference) => {
+    if (engine === 'web_rpa') {
+      return (
+        <span className="by-badge by-badge-warning" title="强制走 Chrome 无头浏览器自动化" style={{ fontSize: '0.74rem', padding: '2px 8px' }}>
+          强制 Chrome
+        </span>
+      );
+    }
+    if (engine === 'imap_pop3') {
+      return (
+        <span className="by-badge by-badge-primary" title="强制走 IMAP/POP3 极速协议通道" style={{ fontSize: '0.74rem', padding: '2px 8px' }}>
+          强制 IMAP
+        </span>
+      );
+    }
+    return (
+      <span className="by-badge by-badge-neutral" title="智能自适应路由" style={{ fontSize: '0.74rem', padding: '2px 8px' }}>
+        智能自适应
+      </span>
+    );
   };
 
   const handleQuickTopUp = async (id: string, count: number) => {
@@ -233,6 +336,30 @@ export const TokensView: React.FC = () => {
       setTokenLogs([]);
     } finally {
       setTokenLogsLoading(false);
+    }
+  };
+
+  const handleOpenReconcileModal = () => {
+    setReconcileResult(null);
+    setShowReconcileModal(true);
+  };
+
+  const handleConfirmReconcile = async () => {
+    if (!tokenForLogs) return;
+    setReconcileLoading(true);
+    try {
+      const res = await backyardApi.reconcileTokenQuota(tokenForLogs.id);
+      setReconcileResult(res);
+      setTokenForLogs(res.token);
+      setTokens((prev) => prev.map((t) => (t.id === res.token.id ? res.token : t)));
+      setToastMessage({ type: 'success', text: res.message });
+      setTimeout(() => setToastMessage(null), 4000);
+      fetchTokens();
+    } catch (err: any) {
+      setToastMessage({ type: 'error', text: err.message || '智能校准额度失败' });
+      setTimeout(() => setToastMessage(null), 4000);
+    } finally {
+      setReconcileLoading(false);
     }
   };
 
@@ -364,7 +491,9 @@ export const TokensView: React.FC = () => {
               <tr>
                 <th>Token 密钥凭据</th>
                 <th>使用者备注</th>
-                <th style={{ minWidth: '180px' }}>额度消费进度 (已用 / 总额)</th>
+                <th>数据返回权限</th>
+                <th>抓取分支</th>
+                <th style={{ minWidth: '170px' }}>额度消费进度 (已用 / 总额)</th>
                 <th>状态</th>
                 <th>创建 / 到期时间</th>
                 <th>快捷充值</th>
@@ -374,14 +503,14 @@ export const TokensView: React.FC = () => {
             <tbody>
               {loading && tokens.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-secondary)' }}>
+                  <td colSpan={9} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-secondary)' }}>
                     <RefreshCw size={20} className="animate-spin" style={{ margin: '0 auto 8px auto' }} />
                     正在载入 Token 列表...
                   </td>
                 </tr>
               ) : tokens.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-muted)' }}>
+                  <td colSpan={9} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-muted)' }}>
                     暂无授权 Token，点击右上角【发行新 Token】开始创建
                   </td>
                 </tr>
@@ -409,6 +538,14 @@ export const TokensView: React.FC = () => {
 
                       <td data-label="使用者备注">
                         <div style={{ fontWeight: 600, color: 'var(--by-text-primary)' }}>{item.name}</div>
+                      </td>
+
+                      <td data-label="数据权限">
+                        {renderScopeBadge(item.scopeMode)}
+                      </td>
+
+                      <td data-label="抓取分支">
+                        {renderEngineBadge(item.enginePreference)}
                       </td>
 
                       <td data-label="额度进度">
@@ -494,6 +631,15 @@ export const TokensView: React.FC = () => {
                           <button
                             type="button"
                             className="by-btn by-btn-secondary by-btn-sm"
+                            onClick={() => handleOpenEdit(item)}
+                            title="编辑 Token 权限与配置 (数据范围/Chrome/IMAP分支)"
+                            style={{ color: 'var(--by-purple)' }}
+                          >
+                            <SlidersHorizontal size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            className="by-btn by-btn-secondary by-btn-sm"
                             onClick={() => handleOpenTokenLogs(item)}
                             title="查看 Token 详细消耗日志"
                             style={{ color: 'var(--by-primary)' }}
@@ -565,7 +711,7 @@ export const TokensView: React.FC = () => {
       {/* Issue Token Modal */}
       {showCreateModal && (
         <div className="by-modal-overlay">
-          <div className="by-modal" style={{ maxWidth: '460px' }}>
+          <div className="by-modal" style={{ maxWidth: '500px' }}>
             <div className="by-modal-header">
               <div className="by-modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <KeyRound size={18} color="var(--by-primary)" /> 发行新 API 授权 Token
@@ -576,7 +722,7 @@ export const TokensView: React.FC = () => {
             </div>
 
             <form onSubmit={handleCreateSubmit}>
-              <div className="by-modal-body">
+              <div className="by-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 <div className="by-input-group">
                   <label className="by-label">使用者备注名称</label>
                   <input
@@ -588,6 +734,40 @@ export const TokensView: React.FC = () => {
                     required
                     autoFocus
                   />
+                </div>
+
+                <div className="by-input-group">
+                  <label className="by-label">数据返回权限 (Scope)</label>
+                  <select
+                    className="by-select"
+                    value={newScopeMode}
+                    onChange={(e) => setNewScopeMode(e.target.value as ScopeMode)}
+                  >
+                    <option value="code_only">仅提取验证码 (精简极速，不返正文，推荐)</option>
+                    <option value="summary">邮件摘要模式 (含主题/发件人/预览，剔除正文)</option>
+                    <option value="full">完整邮件报文 (包含全部 HTML/Text 正文)</option>
+                  </select>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)', marginTop: '3px' }}>
+                    {newScopeMode === 'code_only' && '⚡ 极致轻量：报文 < 500 字节，并在找到验证码时提前中断 IMAP 下载。'}
+                    {newScopeMode === 'summary' && '📄 包含邮件列表与 300 字摘要，不返回几十 KB 冗长 HTML。'}
+                    {newScopeMode === 'full' && '📦 返回完整邮件 Raw/HTML 报文内容。'}
+                  </div>
+                </div>
+
+                <div className="by-input-group">
+                  <label className="by-label">邮件抓取执行分支 (Engine)</label>
+                  <select
+                    className="by-select"
+                    value={newEnginePreference}
+                    onChange={(e) => setNewEnginePreference(e.target.value as EnginePreference)}
+                  >
+                    <option value="auto">智能自适应 (默认：Mail.com 走 RPA，普通走 IMAP)</option>
+                    <option value="imap_pop3">强制 IMAP/POP3 协议 (速度快/省内存，适合已开启 IMAP 的 Mail.com)</option>
+                    <option value="web_rpa">强制 Chrome 无头浏览器 (适合未开启 IMAP 或协议被封账号)</option>
+                  </select>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)', marginTop: '3px' }}>
+                    可针对 mail.com 邮箱自由切换：支持 IMAP 的走极速协议，不支持的走 Chrome。
+                  </div>
                 </div>
 
                 <div className="by-input-group">
@@ -614,7 +794,7 @@ export const TokensView: React.FC = () => {
                     placeholder="自定义次数"
                     required
                   />
-                  <div style={{ fontSize: '0.75rem', color: 'var(--by-text-muted)' }}>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)', marginTop: '3px' }}>
                     每次成功抓取扣减 1 次，外部邮箱网络异常/密码错误失败不扣费。
                   </div>
                 </div>
@@ -637,6 +817,119 @@ export const TokensView: React.FC = () => {
                 </button>
                 <button type="submit" className="by-btn by-btn-primary" disabled={createLoading || !newName.trim()}>
                   {createLoading ? '正在发行...' : '确认发行 Token'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Token Permissions & Settings Modal */}
+      {tokenToEdit && (
+        <div className="by-modal-overlay">
+          <div className="by-modal" style={{ maxWidth: '500px' }}>
+            <div className="by-modal-header">
+              <div className="by-modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <SlidersHorizontal size={18} color="var(--by-purple)" /> 编辑 Token 权限与配置
+              </div>
+              <button className="by-btn-icon" onClick={() => setTokenToEdit(null)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditSubmit}>
+              <div className="by-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  background: 'var(--by-bg-input)',
+                  border: '1px solid var(--by-border)',
+                  fontSize: '0.78rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <code style={{ fontFamily: 'var(--by-font-mono)', fontWeight: 600, color: 'var(--by-text-code)' }}>
+                    {tokenToEdit.token}
+                  </code>
+                </div>
+
+                <div className="by-input-group">
+                  <label className="by-label">使用者备注名称</label>
+                  <input
+                    type="text"
+                    className="by-input"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="by-input-group">
+                  <label className="by-label">数据返回权限 (Scope)</label>
+                  <select
+                    className="by-select"
+                    value={editScopeMode}
+                    onChange={(e) => setEditScopeMode(e.target.value as ScopeMode)}
+                  >
+                    <option value="code_only">仅提取验证码 (精简极速，不返正文，推荐)</option>
+                    <option value="summary">邮件摘要模式 (含主题/发件人/预览，剔除正文)</option>
+                    <option value="full">完整邮件报文 (包含全部 HTML/Text 正文)</option>
+                  </select>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)', marginTop: '3px' }}>
+                    遵循权限收敛原则：若设定为“仅验证码”，外部请求携带 ?scope=full 亦强制返回极简数据。
+                  </div>
+                </div>
+
+                <div className="by-input-group">
+                  <label className="by-label">邮件抓取执行分支 (Engine)</label>
+                  <select
+                    className="by-select"
+                    value={editEnginePreference}
+                    onChange={(e) => setEditEnginePreference(e.target.value as EnginePreference)}
+                  >
+                    <option value="auto">智能自适应 (默认：Mail.com 走 RPA，普通走 IMAP)</option>
+                    <option value="imap_pop3">强制 IMAP/POP3 协议 (速度快/省内存，适合已开启 IMAP 的 Mail.com)</option>
+                    <option value="web_rpa">强制 Chrome 无头浏览器 (适合未开启 IMAP 或协议被封账号)</option>
+                  </select>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)', marginTop: '3px' }}>
+                    实时热切换：随时调整该 Token 下的 Mail.com 等账号走 Chrome RPA 还是 IMAP 协议。
+                  </div>
+                </div>
+
+                <div className="by-input-group">
+                  <label className="by-label">总调用额度 (次数)</label>
+                  <input
+                    type="number"
+                    className="by-input"
+                    min={tokenToEdit.usedQuota}
+                    value={editQuota}
+                    onChange={(e) => setEditQuota(e.target.value)}
+                    required
+                  />
+                  <div style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)', marginTop: '3px' }}>
+                    当前已消耗 {tokenToEdit.usedQuota} 次，修改后剩余可用次数为 {Math.max(0, (Number(editQuota) || 0) - tokenToEdit.usedQuota)} 次。
+                  </div>
+                </div>
+
+                <div className="by-input-group">
+                  <label className="by-label">重新设置有效期</label>
+                  <select className="by-select" value={editDuration} onChange={(e) => setEditDuration(e.target.value)}>
+                    <option value="0">保持原有效期 ({tokenToEdit.expiresAt ? formatFullDateTime(tokenToEdit.expiresAt) : '永久有效'})</option>
+                    <option value="7">从现在起延长 7 天</option>
+                    <option value="30">从现在起延长 30 天</option>
+                    <option value="90">从现在起延长 90 天</option>
+                    <option value="365">从现在起延长 1 年</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="by-modal-footer">
+                <button type="button" className="by-btn by-btn-secondary" onClick={() => setTokenToEdit(null)}>
+                  取消
+                </button>
+                <button type="submit" className="by-btn by-btn-primary" disabled={editLoading || !editName.trim()}>
+                  {editLoading ? '正在保存...' : '保存权限配置'}
                 </button>
               </div>
             </form>
@@ -732,8 +1025,10 @@ export const TokensView: React.FC = () => {
                   <KeyRound size={18} />
                 </div>
                 <div>
-                  <div className="by-modal-title" style={{ fontSize: '1.08rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div className="by-modal-title" style={{ fontSize: '1.08rem', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                     <span>【{tokenForLogs.name}】Token 消耗与调用审计</span>
+                    {renderScopeBadge(tokenForLogs.scopeMode)}
+                    {renderEngineBadge(tokenForLogs.enginePreference)}
                   </div>
                   <div style={{ fontSize: '0.78rem', color: 'var(--by-text-muted)', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span>密钥:</span>
@@ -954,6 +1249,28 @@ export const TokensView: React.FC = () => {
                   <button
                     type="button"
                     className="by-btn by-btn-secondary by-btn-sm"
+                    style={{
+                      height: '28px',
+                      padding: '0 10px',
+                      fontSize: '0.78rem',
+                      color: 'var(--by-primary)',
+                      borderColor: 'var(--by-primary)',
+                      background: 'rgba(99, 102, 241, 0.08)',
+                      fontWeight: 600,
+                      gap: '4px',
+                      display: 'inline-flex',
+                      alignItems: 'center'
+                    }}
+                    onClick={handleOpenReconcileModal}
+                    title="点击打开智能识别与额度校准弹窗"
+                  >
+                    <Sparkles size={13} color="var(--by-primary)" />
+                    <span>智能识别</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="by-btn by-btn-secondary by-btn-sm"
                     style={{ height: '28px', padding: '0 10px', fontSize: '0.78rem' }}
                     onClick={() => handleOpenTokenLogs(tokenForLogs, tokenLogsPage, tokenLogsPageSize, tokenLogsStatusTab)}
                     disabled={tokenLogsLoading}
@@ -1105,6 +1422,211 @@ export const TokensView: React.FC = () => {
               <button type="button" className="by-btn by-btn-secondary" style={{ height: '32px', padding: '0 16px', fontSize: '0.84rem' }} onClick={() => setTokenForLogs(null)}>
                 关闭
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Smart Reconciliation Pop-up Modal (智能识别与额度校准弹窗) */}
+      {showReconcileModal && tokenForLogs && (
+        <div className="by-modal-overlay" style={{ zIndex: 1100 }}>
+          <div className="by-modal" style={{ maxWidth: '520px', width: '92vw' }}>
+            <div className="by-modal-header" style={{ padding: '16px 20px' }}>
+              <div className="by-modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.05rem' }}>
+                <Sparkles size={18} color="var(--by-primary)" /> 智能识别与额度核销对齐
+              </div>
+              <button
+                className="by-btn-icon"
+                onClick={() => {
+                  setShowReconcileModal(false);
+                  setReconcileResult(null);
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="by-modal-body" style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {/* Token Info Header */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                background: 'var(--by-bg-input)',
+                border: '1px solid var(--by-border)'
+              }}>
+                <div>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)', marginBottom: '2px' }}>目标 Token</div>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--by-text-primary)' }}>
+                    {tokenForLogs.name}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--by-text-muted)', marginBottom: '2px' }}>总额度</div>
+                  <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--by-text-secondary)' }}>
+                    {tokenForLogs.totalQuota} 次
+                  </div>
+                </div>
+              </div>
+
+              {!reconcileResult ? (
+                <>
+                  {/* Explanation Card */}
+                  <div style={{
+                    padding: '12px 14px',
+                    borderRadius: '8px',
+                    background: 'rgba(99, 102, 241, 0.06)',
+                    border: '1px solid rgba(99, 102, 241, 0.2)',
+                    fontSize: '0.82rem',
+                    lineHeight: '1.55',
+                    color: 'var(--by-text-secondary)'
+                  }}>
+                    <div style={{ fontWeight: 700, color: 'var(--by-primary)', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <Activity size={14} /> 智能识别核销说明：
+                    </div>
+                    <div>
+                      系统将自动检索审计日志中该 Token 名下<strong>所有正常成功（提取到验证码/成功读取邮件）</strong>的真实有效调用记录，并将已用额度自动校准对齐为真实成功流水件数。
+                    </div>
+                  </div>
+
+                  {/* Live Calculation Comparison Grid */}
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '10px'
+                  }}>
+                    <div style={{
+                      padding: '12px',
+                      borderRadius: '8px',
+                      background: 'var(--by-bg-input)',
+                      border: '1px solid var(--by-border)',
+                      textAlign: 'center'
+                    }}>
+                      <div style={{ fontSize: '0.76rem', color: 'var(--by-text-muted)', marginBottom: '4px' }}>
+                        当前记录已消耗
+                      </div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--by-warning)' }}>
+                        {tokenForLogs.usedQuota} <span style={{ fontSize: '0.78rem', fontWeight: 500 }}>次</span>
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--by-text-muted)', marginTop: '2px' }}>
+                        剩余可用: {tokenForLogs.remainingQuota} 次
+                      </div>
+                    </div>
+
+                    <div style={{
+                      padding: '12px',
+                      borderRadius: '8px',
+                      background: 'rgba(16, 185, 129, 0.08)',
+                      border: '1px solid rgba(16, 185, 129, 0.25)',
+                      textAlign: 'center'
+                    }}>
+                      <div style={{ fontSize: '0.76rem', color: '#10b981', fontWeight: 600, marginBottom: '4px' }}>
+                        审计流水实际成功
+                      </div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#10b981' }}>
+                        {tokenLogsStats?.successCalls ?? 0} <span style={{ fontSize: '0.78rem', fontWeight: 500 }}>次</span>
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--by-text-muted)', marginTop: '2px' }}>
+                        核销后预计剩余: {Math.max(0, tokenForLogs.totalQuota - (tokenLogsStats?.successCalls ?? 0))} 次
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Discrepancy Notice */}
+                  <div style={{
+                    fontSize: '0.78rem',
+                    color: (tokenLogsStats?.successCalls ?? 0) === tokenForLogs.usedQuota ? 'var(--by-text-muted)' : 'var(--by-info)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '4px 2px'
+                  }}>
+                    <CheckCircle size={13} color={(tokenLogsStats?.successCalls ?? 0) === tokenForLogs.usedQuota ? 'var(--by-text-muted)' : 'var(--by-info)'} />
+                    <span>
+                      {(tokenLogsStats?.successCalls ?? 0) === tokenForLogs.usedQuota
+                        ? '当前已消耗额度与成功审计记录完全一致，核销后数据保持一致。'
+                        : `核销后已用额度将调整至 ${tokenLogsStats?.successCalls ?? 0} 次（差额 ${(tokenLogsStats?.successCalls ?? 0) - tokenForLogs.usedQuota >= 0 ? '+' : ''}${(tokenLogsStats?.successCalls ?? 0) - tokenForLogs.usedQuota} 次）。`}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                /* Success Feedback Card */
+                <div style={{
+                  padding: '16px',
+                  borderRadius: '10px',
+                  background: 'rgba(16, 185, 129, 0.08)',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px',
+                  textAlign: 'center'
+                }}>
+                  <div style={{ display: 'inline-flex', justifyContent: 'center', alignItems: 'center', width: '42px', height: '42px', borderRadius: '50%', background: 'rgba(16, 185, 129, 0.15)', margin: '0 auto', color: '#10b981' }}>
+                    <CheckCircle2 size={24} />
+                  </div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--by-text-primary)' }}>
+                    智能识别与核销对齐完成！
+                  </div>
+                  <div style={{ fontSize: '0.84rem', color: 'var(--by-text-secondary)', lineHeight: '1.5' }}>
+                    Token <strong>"{reconcileResult.token.name}"</strong> 已用额度已成功校准为 <strong>{reconcileResult.reconciledCount} 次</strong>
+                  </div>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'center',
+                    gap: '16px',
+                    padding: '8px 12px',
+                    background: 'var(--by-bg-input)',
+                    borderRadius: '8px',
+                    border: '1px solid var(--by-border)',
+                    fontSize: '0.8rem',
+                    color: 'var(--by-text-secondary)',
+                    marginTop: '4px'
+                  }}>
+                    <span>总额度: <strong>{reconcileResult.token.totalQuota} 次</strong></span>
+                    <span>已用: <strong style={{ color: 'var(--by-warning)' }}>{reconcileResult.token.usedQuota} 次</strong></span>
+                    <span>剩余可用: <strong style={{ color: 'var(--by-success)' }}>{reconcileResult.token.remainingQuota} 次</strong></span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="by-modal-footer" style={{ padding: '12px 20px' }}>
+              {!reconcileResult ? (
+                <>
+                  <button
+                    type="button"
+                    className="by-btn by-btn-secondary"
+                    onClick={() => setShowReconcileModal(false)}
+                    disabled={reconcileLoading}
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="by-btn by-btn-primary"
+                    onClick={handleConfirmReconcile}
+                    disabled={reconcileLoading}
+                    style={{ gap: '6px' }}
+                  >
+                    <Sparkles size={14} className={reconcileLoading ? 'animate-spin' : ''} />
+                    {reconcileLoading ? '正在核销对齐...' : '确认智能核销对齐'}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="by-btn by-btn-primary"
+                  onClick={() => {
+                    setShowReconcileModal(false);
+                    setReconcileResult(null);
+                  }}
+                  style={{ width: '100%' }}
+                >
+                  确定并完成
+                </button>
+              )}
             </div>
           </div>
         </div>

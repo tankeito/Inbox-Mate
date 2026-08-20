@@ -183,6 +183,8 @@ class DatabaseService {
         name TEXT NOT NULL,
         total_quota INTEGER NOT NULL DEFAULT 10,
         used_quota INTEGER NOT NULL DEFAULT 0,
+        scope_mode TEXT NOT NULL DEFAULT 'code_only',
+        engine_preference TEXT NOT NULL DEFAULT 'auto',
         is_active INTEGER NOT NULL DEFAULT 1,
         expires_at TEXT,
         created_at TEXT NOT NULL,
@@ -236,6 +238,14 @@ class DatabaseService {
 
     // Column migrations
     try {
+      const tokenColumns = (this.db.prepare('PRAGMA table_info(access_tokens)').all() as any[]).map((c) => c.name);
+      if (!tokenColumns.includes('scope_mode')) {
+        this.db.exec("ALTER TABLE access_tokens ADD COLUMN scope_mode TEXT NOT NULL DEFAULT 'code_only';");
+      }
+      if (!tokenColumns.includes('engine_preference')) {
+        this.db.exec("ALTER TABLE access_tokens ADD COLUMN engine_preference TEXT NOT NULL DEFAULT 'auto';");
+      }
+
       const usageColumns = (this.db.prepare('PRAGMA table_info(usage_logs)').all() as any[]).map((c) => c.name);
       if (!usageColumns.includes('token_id')) {
         this.db.exec('ALTER TABLE usage_logs ADD COLUMN token_id TEXT;');

@@ -97,7 +97,8 @@ export interface ApiKeyPublicResult {
     from?: string;
   } | null;
   messageCount: number;
-  messages: Array<{
+  scopeMode?: 'code_only' | 'summary' | 'full';
+  messages?: Array<{
     id: string;
     subject: string;
     from: string;
@@ -109,6 +110,14 @@ export interface ApiKeyPublicResult {
     hasCode: boolean;
     extractedCode?: string;
   }>;
+  tokenInfo?: {
+    name: string;
+    usedQuota: number;
+    totalQuota: number;
+    remainingQuota: number;
+    scopeMode?: string;
+    enginePreference?: string;
+  };
   cached?: boolean;
   queriedAt: string;
   durationMs: number;
@@ -501,6 +510,8 @@ export class ApiKeyService {
       clientIp: string;
       region?: string;
       token?: string;
+      scope?: 'code_only' | 'summary' | 'full';
+      engine?: 'auto' | 'web_rpa' | 'imap_pop3';
     }
   ): Promise<ApiKeyPublicResult> {
     const startTime = Date.now();
@@ -533,6 +544,22 @@ export class ApiKeyService {
         verifiedToken = check.token;
       }
     }
+
+    // Determine effective Scope according to Least Privilege Principle (Token max privilege is the hard ceiling)
+    const tokenMaxScope: 'code_only' | 'summary' | 'full' = verifiedToken?.scopeMode || 'full';
+    let effectiveScope: 'code_only' | 'summary' | 'full' = 'full';
+    if (tokenMaxScope === 'code_only') {
+      // Hard cap: cannot be elevated even if caller requests ?scope=full
+      effectiveScope = 'code_only';
+    } else if (tokenMaxScope === 'summary') {
+      effectiveScope = options.scope === 'code_only' ? 'code_only' : 'summary';
+    } else {
+      effectiveScope = options.scope || 'full';
+    }
+
+    // Determine effective Engine Preference
+    const tokenEngine: 'auto' | 'web_rpa' | 'imap_pop3' = verifiedToken?.enginePreference || 'auto';
+    const effectiveEngine: 'auto' | 'web_rpa' | 'imap_pop3' = options.engine || tokenEngine;
 
     // Anti-hammering cooldown cache check
     const cooldownMs = systemSettingsService.getSettings().apiCooldownMs;
@@ -579,7 +606,7 @@ export class ApiKeyService {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), resolveApiKeyFetchTimeoutMs(provider));
 
-    diagLogger.info('api', '接收请求', `收到 API Key 邮件拉取请求 (${email})`, { apiKey, clientIp: options.clientIp, traceId }, email, traceId);
+    diagLogger.info('api', '接收请求', `收到 API Key 邮件拉取请求 (${email}) [范围: ${effectiveScope}, 分支: ${effectiveEngine}]`, { apiKey, clientIp: options.clientIp, traceId }, email, traceId);
 
     try {
       const fetchResult = await fetchAccountVerificationCode(accountInput, {
@@ -587,6 +614,8 @@ export class ApiKeyService {
         maxMessages: typeof options.maxMessages === 'number' && options.maxMessages > 0 ? options.maxMessages : 10,
         signal: controller.signal,
         traceId,
+        scopeMode: effectiveScope,
+        enginePreference: effectiveEngine,
         onProgress: (state) => {
           diagLogger.debug('api', `进度: ${state}`, `正在执行 ${state}`, undefined, email, traceId);
         },
@@ -604,25 +633,18 @@ export class ApiKeyService {
       const nowIso = new Date().toISOString();
       db.prepare('UPDATE api_keys SET call_count = call_count + 1, last_used_at = ? WHERE id = ?').run(nowIso, row.id);
 
-      // Post-execution quota deduction (Only consume on Web RPA success)
+      // Post-execution quota deduction (Deduct on all successful API calls using a verified token)
       let tokenInfoPayload: any = undefined;
       if (verifiedToken) {
-        if (provider === 'mailcom' || provider === 'offilive') {
-          accessTokenService.consumeQuota(verifiedToken.id);
-          tokenInfoPayload = {
-            name: verifiedToken.name,
-            usedQuota: verifiedToken.usedQuota + 1,
-            totalQuota: verifiedToken.totalQuota,
-            remainingQuota: Math.max(0, verifiedToken.remainingQuota - 1)
-          };
-        } else {
-          tokenInfoPayload = {
-            name: verifiedToken.name,
-            usedQuota: verifiedToken.usedQuota,
-            totalQuota: verifiedToken.totalQuota,
-            remainingQuota: verifiedToken.remainingQuota
-          };
-        }
+        accessTokenService.consumeQuota(verifiedToken.id);
+        tokenInfoPayload = {
+          name: verifiedToken.name,
+          usedQuota: verifiedToken.usedQuota + 1,
+          totalQuota: verifiedToken.totalQuota,
+          remainingQuota: Math.max(0, verifiedToken.remainingQuota - 1),
+          scopeMode: effectiveScope,
+          enginePreference: effectiveEngine
+        };
       }
 
       // Record usage log
@@ -642,6 +664,33 @@ export class ApiKeyService {
         token: verifiedToken?.token || row.bound_token || undefined
       });
 
+      // Construct slim or full response based on effectiveScope
+      let messagesOutput: any = undefined;
+      if (effectiveScope === 'summary') {
+        messagesOutput = (fetchResult.messages || []).map((m) => ({
+          id: m.id,
+          subject: m.subject,
+          from: m.from,
+          receivedAt: m.receivedAt,
+          snippet: m.snippet,
+          hasCode: Boolean(m.codeMatch),
+          extractedCode: m.codeMatch?.code
+        }));
+      } else if (effectiveScope === 'full') {
+        messagesOutput = (fetchResult.messages || []).map((m) => ({
+          id: m.id,
+          subject: m.subject,
+          from: m.from,
+          receivedAt: m.receivedAt,
+          snippet: m.snippet,
+          body: m.textBody || m.snippet || '',
+          textBody: m.textBody || m.snippet || '',
+          htmlBody: m.htmlBody || undefined,
+          hasCode: Boolean(m.codeMatch),
+          extractedCode: m.codeMatch?.code
+        }));
+      }
+
       const publicResult: ApiKeyPublicResult = {
         code: 200,
         success: true,
@@ -658,18 +707,8 @@ export class ApiKeyService {
             }
           : null,
         messageCount: fetchResult.messages?.length || 0,
-        messages: (fetchResult.messages || []).map((m) => ({
-          id: m.id,
-          subject: m.subject,
-          from: m.from,
-          receivedAt: m.receivedAt,
-          snippet: m.snippet,
-          body: m.textBody || m.snippet || '',
-          textBody: m.textBody || m.snippet || '',
-          htmlBody: m.htmlBody || undefined,
-          hasCode: Boolean(m.codeMatch),
-          extractedCode: m.codeMatch?.code
-        })),
+        scopeMode: effectiveScope,
+        messages: messagesOutput,
         tokenInfo: tokenInfoPayload,
         queriedAt: nowIso,
         durationMs

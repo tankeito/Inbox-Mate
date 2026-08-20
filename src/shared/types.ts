@@ -74,6 +74,7 @@ export interface AccountInput {
   customPort?: number;
   customProtocol?: 'imap' | 'pop3';
   customSecure?: boolean;
+  enginePreference?: 'auto' | 'web_rpa' | 'imap_pop3';
 }
 
 export interface CreateJobInput {

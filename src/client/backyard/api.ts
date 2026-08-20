@@ -326,9 +326,32 @@ export const backyardApi = {
     }>(`/tokens?${searchParams.toString()}`);
   },
 
-  async createToken(payload: { name: string; totalQuota?: number; durationDays?: number | null }) {
+  async createToken(payload: {
+    name: string;
+    totalQuota?: number;
+    durationDays?: number | null;
+    scopeMode?: 'code_only' | 'summary' | 'full';
+    enginePreference?: 'auto' | 'web_rpa' | 'imap_pop3';
+  }) {
     return request<{ ok: boolean; token: AccessTokenItem; message: string }>('/tokens', {
       method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
+
+  async updateToken(
+    id: string,
+    payload: {
+      name?: string;
+      totalQuota?: number;
+      durationDays?: number | null;
+      scopeMode?: 'code_only' | 'summary' | 'full';
+      enginePreference?: 'auto' | 'web_rpa' | 'imap_pop3';
+      isActive?: boolean;
+    }
+  ) {
+    return request<{ ok: boolean; token: AccessTokenItem; message: string }>(`/tokens/${id}`, {
+      method: 'PUT',
       body: JSON.stringify(payload)
     });
   },
@@ -361,6 +384,18 @@ export const backyardApi = {
     if (params?.endDate) searchParams.set('endDate', params.endDate);
     if (params?.status && params.status !== 'all') searchParams.set('status', params.status);
     return request<TokenLogsResponse>(`/tokens/${id}/logs?${searchParams.toString()}`);
+  },
+
+  async reconcileTokenQuota(id: string) {
+    return request<{
+      ok: boolean;
+      token: AccessTokenItem;
+      reconciledCount: number;
+      previousUsedQuota: number;
+      message: string;
+    }>(`/tokens/${id}/reconcile`, {
+      method: 'POST'
+    });
   },
 
   // System Concurrency & Hardware Tuning Settings

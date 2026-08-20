@@ -508,15 +508,35 @@ export function createBackyardRouter(): express.Router {
 
   router.post('/tokens', requireAdmin, (req: Request, res: Response) => {
     try {
-      const { name, totalQuota, durationDays } = req.body || {};
+      const { name, totalQuota, durationDays, scopeMode, enginePreference } = req.body || {};
       const token = accessTokenService.createToken({
         name,
         totalQuota: totalQuota ? Number(totalQuota) : 10,
-        durationDays: durationDays ? Number(durationDays) : null
+        durationDays: durationDays ? Number(durationDays) : null,
+        scopeMode: scopeMode || 'code_only',
+        enginePreference: enginePreference || 'auto'
       });
       res.json({ ok: true, token, message: '成功发行新访问 Token' });
     } catch (err: any) {
       res.status(400).json({ error: err.message || '创建 Token 失败' });
+    }
+  });
+
+  router.put('/tokens/:id', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const id = firstParam(req.params.id);
+      const { name, totalQuota, durationDays, scopeMode, enginePreference, isActive } = req.body || {};
+      const token = accessTokenService.updateToken(id, {
+        name,
+        totalQuota: totalQuota !== undefined ? Number(totalQuota) : undefined,
+        durationDays: durationDays !== undefined ? (durationDays ? Number(durationDays) : null) : undefined,
+        scopeMode,
+        enginePreference,
+        isActive
+      });
+      res.json({ ok: true, token, message: 'Token 权限与配置已更新成功' });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '更新 Token 失败' });
     }
   });
 
@@ -556,6 +576,16 @@ export function createBackyardRouter(): express.Router {
       res.json(result);
     } catch (err: any) {
       res.status(400).json({ error: err.message || '获取 Token 消耗日志失败' });
+    }
+  });
+
+  router.post('/tokens/:id/reconcile', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const id = firstParam(req.params.id);
+      const result = accessTokenService.reconcileTokenQuota(id);
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '智能校准 Token 额度失败' });
     }
   });
 

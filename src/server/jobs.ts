@@ -224,8 +224,10 @@ export class JobManager {
       await Promise.all(
         job.accounts.map(async (account, index) => {
           if (!account.input) return;
+          const isMailCom = account.input.provider === 'mailcom' || account.input.email.endsWith('@mail.com') || account.input.email.endsWith('@cheerful.com');
           const engineType = routeAccountEngine(account.input);
-          if (engineType === 'web_rpa') {
+
+          if (engineType === 'web_rpa' || isMailCom) {
             const timeoutMs = resolveRpaAccountTimeoutMs(account.input.provider, this.rpaTimeoutMs);
             return this.rpaLimit(async () => {
               // Add a gentle stagger for batch executions (300ms ~ 800ms) to prevent burst collisions on the same target IP

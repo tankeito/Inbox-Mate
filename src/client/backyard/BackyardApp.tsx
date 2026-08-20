@@ -211,73 +211,73 @@ export const BackyardApp: React.FC = () => {
             <button
               className={`by-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
               onClick={() => navigateTo('dashboard')}
-              title={isSidebarCollapsed ? '控制台总览' : undefined}
+              title={isSidebarCollapsed ? '控制台' : undefined}
             >
               <LayoutDashboard size={18} />
-              <span className="by-nav-text">控制台总览</span>
+              <span className="by-nav-text">控制台</span>
             </button>
 
             <button
               className={`by-nav-item ${activeTab === 'rpa' ? 'active' : ''}`}
               onClick={() => navigateTo('rpa')}
-              title={isSidebarCollapsed ? 'Chrome RPA 运维' : undefined}
+              title={isSidebarCollapsed ? '浏览器运维' : undefined}
             >
               <Zap size={18} />
-              <span className="by-nav-text">Chrome RPA 运维</span>
+              <span className="by-nav-text">浏览器运维</span>
             </button>
 
             <button
               className={`by-nav-item ${activeTab === 'tokens' ? 'active' : ''}`}
               onClick={() => navigateTo('tokens')}
-              title={isSidebarCollapsed ? '授权 Token 生成器' : undefined}
+              title={isSidebarCollapsed ? 'Token 授权' : undefined}
             >
               <KeyRound size={18} />
-              <span className="by-nav-text">授权 Token 生成器</span>
+              <span className="by-nav-text">Token 授权</span>
             </button>
 
             <button
               className={`by-nav-item ${activeTab === 'ip-analytics' ? 'active' : ''}`}
               onClick={() => navigateTo('ip-analytics')}
-              title={isSidebarCollapsed ? 'IP 统计与安全防御' : undefined}
+              title={isSidebarCollapsed ? 'IP 防护' : undefined}
             >
               <Globe size={18} />
-              <span className="by-nav-text">IP 统计与安全防御</span>
+              <span className="by-nav-text">IP 防护</span>
             </button>
 
             <button
               className={`by-nav-item ${activeTab === 'logs' ? 'active' : ''}`}
               onClick={() => navigateTo('logs')}
-              title={isSidebarCollapsed ? '使用记录审计' : undefined}
+              title={isSidebarCollapsed ? '调用日志' : undefined}
             >
               <FileText size={18} />
-              <span className="by-nav-text">使用记录审计</span>
+              <span className="by-nav-text">调用日志</span>
             </button>
 
             <button
               className={`by-nav-item ${activeTab === 'keys' ? 'active' : ''}`}
               onClick={() => navigateTo('keys')}
-              title={isSidebarCollapsed ? 'API Key 发行与管理' : undefined}
+              title={isSidebarCollapsed ? 'API 密钥' : undefined}
             >
               <Key size={18} />
-              <span className="by-nav-text">API Key 发行与管理</span>
+              <span className="by-nav-text">API 密钥</span>
             </button>
 
             <button
               className={`by-nav-item ${activeTab === 'diagnostics' ? 'active' : ''}`}
               onClick={() => navigateTo('diagnostics')}
-              title={isSidebarCollapsed ? 'Chrome RPA 诊断' : undefined}
+              title={isSidebarCollapsed ? '系统诊断' : undefined}
             >
               <Activity size={18} />
-              <span className="by-nav-text">Chrome RPA 诊断</span>
+              <span className="by-nav-text">系统诊断</span>
             </button>
 
             <button
               className={`by-nav-item ${activeTab === 'settings' ? 'active' : ''}`}
               onClick={() => navigateTo('settings')}
-              title={isSidebarCollapsed ? '安全与 2FA 设置' : undefined}
+              title={isSidebarCollapsed ? '安全设置' : undefined}
             >
               <Settings size={18} />
-              <span className="by-nav-text">安全与 2FA 设置</span>
+              <span className="by-nav-text">安全设置</span>
             </button>
           </nav>
 
@@ -459,7 +459,7 @@ export const BackyardApp: React.FC = () => {
                 onClick={() => navigateTo('dashboard')}
               >
                 <LayoutDashboard size={18} />
-                <span>控制台总览</span>
+                <span>控制台</span>
               </button>
 
               <button
@@ -467,7 +467,7 @@ export const BackyardApp: React.FC = () => {
                 onClick={() => navigateTo('rpa')}
               >
                 <Zap size={18} />
-                <span>Chrome RPA 运维</span>
+                <span>浏览器运维</span>
               </button>
 
               <button
@@ -475,7 +475,7 @@ export const BackyardApp: React.FC = () => {
                 onClick={() => navigateTo('tokens')}
               >
                 <KeyRound size={18} />
-                <span>API 授权 Token 生成器</span>
+                <span>Token 授权</span>
               </button>
 
               <button
@@ -483,7 +483,7 @@ export const BackyardApp: React.FC = () => {
                 onClick={() => navigateTo('ip-analytics')}
               >
                 <Globe size={18} />
-                <span>IP 统计与安全防御</span>
+                <span>IP 防护</span>
               </button>
 
               <button
@@ -491,7 +491,7 @@ export const BackyardApp: React.FC = () => {
                 onClick={() => navigateTo('logs')}
               >
                 <FileText size={18} />
-                <span>用户使用记录审计</span>
+                <span>调用日志</span>
               </button>
 
               <button
@@ -499,7 +499,7 @@ export const BackyardApp: React.FC = () => {
                 onClick={() => navigateTo('keys')}
               >
                 <Key size={18} />
-                <span>API Key 发行与管理</span>
+                <span>API 密钥</span>
               </button>
 
               <button
@@ -507,7 +507,7 @@ export const BackyardApp: React.FC = () => {
                 onClick={() => navigateTo('diagnostics')}
               >
                 <Activity size={18} />
-                <span>Chrome RPA 与系统诊断</span>
+                <span>系统诊断</span>
               </button>
 
               <button
@@ -515,7 +515,7 @@ export const BackyardApp: React.FC = () => {
                 onClick={() => navigateTo('settings')}
               >
                 <Settings size={18} />
-                <span>安全与 2FA 设置</span>
+                <span>安全设置</span>
               </button>
             </nav>
 

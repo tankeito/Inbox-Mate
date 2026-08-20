@@ -111,6 +111,7 @@ interface Account {
   customHost?: string;
   customPort?: number;
   customProtocol?: 'imap' | 'pop3';
+  enginePreference?: 'auto' | 'web_rpa' | 'imap_pop3';
   status: AccountStatus;
   errorCode?: string;
   errorMessage?: string;
@@ -127,6 +128,7 @@ interface AccountDraft {
   customHost?: string;
   customPort?: number;
   customProtocol?: 'imap' | 'pop3';
+  enginePreference?: 'auto' | 'web_rpa' | 'imap_pop3';
 }
 
 interface ToastState {
@@ -1458,6 +1460,7 @@ export function App() {
             customHost: account.customHost,
             customPort: account.customPort,
             customProtocol: account.customProtocol,
+            enginePreference: account.enginePreference,
             auth:
               account.refreshToken
                 ? { type: 'refresh_token', refreshToken: account.refreshToken, clientId: account.clientId }
@@ -2798,15 +2801,36 @@ function AccountQueueCard({
             {account.provider.slice(0, 1).toUpperCase()}
           </span>
           <div className="email-meta">
-            <span className="email-text" title={account.email}>
-              {account.email}
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              <span className="email-text" title={account.email}>
+                {account.email}
+              </span>
+              {account.provider === 'mailcom' && (
+                <span
+                  className="engine-mode-tag"
+                  title="智能识别模式：优先探测 IMAP/POP3 极速协议通道，若账号未开通 IMAP 权限则自动无缝切换至 Chrome 无头浏览器自动化"
+                  style={{
+                    fontSize: '0.68rem',
+                    padding: '1px 6px',
+                    borderRadius: '4px',
+                    background: 'rgba(16, 185, 129, 0.12)',
+                    color: '#10b981',
+                    fontWeight: 600,
+                    border: '1px solid rgba(16, 185, 129, 0.25)'
+                  }}
+                >
+                  ✨ 智能识别 (IMAP优先)
+                </span>
+              )}
+            </div>
             <span className="messages-count">
               {account.messages
                 ? `${account.messages.length} 封邮件`
                 : hasRefreshToken
                   ? 'Graph API 刷新令牌'
-                  : providerDetails[account.provider].domain}
+                  : account.provider === 'mailcom'
+                    ? 'Mail.com (支持IMAP优先走IMAP)'
+                    : providerDetails[account.provider].domain}
             </span>
           </div>
         </div>

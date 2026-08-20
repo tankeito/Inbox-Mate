@@ -43,17 +43,39 @@ export function isInboxMateError(value: unknown): value is InboxMateError {
 export function classifyImapError(error: unknown, wasAborted: boolean): SafeErrorCode {
   if (wasAborted) return 'CANCELLED';
 
-  const candidate = error as { name?: string; code?: string; authenticationFailed?: boolean };
+  const candidate = error as {
+    name?: string;
+    code?: string;
+    authenticationFailed?: boolean;
+    message?: string;
+    responseCode?: string;
+    responseText?: string;
+  };
   const name = `${candidate?.name ?? ''}`.toLowerCase();
   const code = `${candidate?.code ?? ''}`.toLowerCase();
+  const message = `${candidate?.message ?? ''}`.toLowerCase();
+  const responseCode = `${candidate?.responseCode ?? ''}`.toLowerCase();
+  const responseText = `${candidate?.responseText ?? ''}`.toLowerCase();
 
-  if (candidate?.authenticationFailed || name.includes('authentication') || code.includes('auth')) {
+  const fullErrStr = `${name} ${code} ${message} ${responseCode} ${responseText}`;
+
+  if (
+    candidate?.authenticationFailed ||
+    fullErrStr.includes('authentication') ||
+    fullErrStr.includes('auth_failed') ||
+    fullErrStr.includes('invalid credentials') ||
+    fullErrStr.includes('bad login') ||
+    fullErrStr.includes('login failed') ||
+    fullErrStr.includes('password') ||
+    fullErrStr.includes('unauthorized') ||
+    fullErrStr.includes('auth')
+  ) {
     return 'AUTH_FAILED';
   }
-  if (code.includes('timeout') || code === 'etimedout' || code === 'esockettimeout') {
+  if (fullErrStr.includes('timeout') || code === 'etimedout' || code === 'esockettimeout') {
     return 'TIMEOUT';
   }
-  if (code.includes('abort') || name.includes('abort')) {
+  if (fullErrStr.includes('abort') || name.includes('abort')) {
     return 'CANCELLED';
   }
   return 'CONNECTION_FAILED';

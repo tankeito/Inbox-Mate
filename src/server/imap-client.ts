@@ -17,6 +17,8 @@ export interface FetchAccountOptions {
   onProgress: (state: 'authenticating' | 'connecting' | 'searching' | 'parsing') => void;
   resolveMicrosoftAccessToken: (sessionId: string, email: string) => string;
   traceId?: string;
+  scopeMode?: 'code_only' | 'summary' | 'full';
+  enginePreference?: 'auto' | 'web_rpa' | 'imap_pop3';
 }
 
 interface CandidateMessage {
@@ -101,7 +103,7 @@ import { fetchAccountVerificationCodeViaWebRpa } from './engines/web-rpa-engine.
 import { proxyService } from './services/proxy-service.js';
 
 export async function fetchAccountVerificationCode(account: AccountInput, options: FetchAccountOptions): Promise<FetchAccountResult> {
-  const engineType = routeAccountEngine(account);
+  const engineType = routeAccountEngine(account, options.enginePreference);
 
   if (engineType === 'web_rpa') {
     return fetchAccountVerificationCodeViaWebRpa(account, options);
@@ -153,7 +155,41 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
 
 
     options.onProgress('connecting');
-    await client.connect();
+    try {
+      await client.connect();
+    } catch (connectErr: any) {
+      if (activeProxy && !options.signal.aborted) {
+        // Fallback: If proxy failed or dropped connection, log and retry directly
+        try {
+          proxyService.recordTraffic({
+            proxyId: activeProxy.id,
+            status: 'error',
+            emailAccount: account.email
+          });
+        } catch {
+          // ignore
+        }
+        client = new ImapFlow({
+          host,
+          port,
+          secure: true,
+          servername: host,
+          tls: {
+            rejectUnauthorized: false,
+            minVersion: 'TLSv1.2'
+          },
+          auth,
+          disableAutoIdle: true,
+          connectionTimeout,
+          greetingTimeout: connectionTimeout,
+          socketTimeout: connectionTimeout + 5000,
+          logger: false
+        });
+        await client.connect();
+      } else {
+        throw connectErr;
+      }
+    }
     if (options.signal.aborted) throw new InboxMateError('CANCELLED');
 
     lock = await client.getMailboxLock('INBOX', { readOnly: true, acquireTimeout: connectionTimeout });
@@ -186,8 +222,26 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
     options.onProgress('parsing');
     const emailItems: EmailItem[] = [];
     const matches: CodeMatch[] = [];
-    for (const candidate of candidates.sort((left, right) => right.receivedAt.getTime() - left.receivedAt.getTime()).slice(0, options.maxMessages)) {
+    const isCodeOnly = options.scopeMode === 'code_only';
+
+    const sortedCandidates = candidates
+      .sort((left, right) => right.receivedAt.getTime() - left.receivedAt.getTime())
+      .slice(0, options.maxMessages);
+
+    for (const candidate of sortedCandidates) {
       if (options.signal.aborted) throw new InboxMateError('CANCELLED');
+
+      // Fast check: Check if subject already contains a verification code
+      let subjectMatch: CodeMatch | undefined = undefined;
+      if (candidate.subject) {
+        subjectMatch = extractVerificationCode({
+          subject: candidate.subject,
+          text: candidate.subject,
+          receivedAt: candidate.receivedAt,
+          from: candidate.from
+        });
+      }
+
       const textParts = selectTextParts(candidate.bodyStructure).slice(0, 2);
       let textBody = '';
       let htmlBody: string | undefined = undefined;
@@ -195,13 +249,13 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
       for (const part of textParts) {
         const download = await client.download(candidate.uid.toString(), part.part, {
           uid: true,
-          maxBytes: MAX_TEXT_PART_BYTES,
+          maxBytes: isCodeOnly ? 32 * 1024 : MAX_TEXT_PART_BYTES,
           chunkSize: 32 * 1024
         });
         const raw = await streamToBuffer(download.content as AsyncIterable<Buffer | string>, options.signal);
         const decoded = await decodeTextPart(raw, part.type);
         if (decoded.text) textBody += (textBody ? '\n\n' : '') + decoded.text;
-        if (decoded.html && !htmlBody) htmlBody = decoded.html;
+        if (decoded.html && !htmlBody && !isCodeOnly) htmlBody = decoded.html;
       }
 
       const match = extractVerificationCode({
@@ -209,7 +263,8 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
         text: textBody,
         receivedAt: candidate.receivedAt,
         from: candidate.from
-      });
+      }) || subjectMatch;
+
       if (match) matches.push(match);
 
       const snippet = textBody.trim().replace(/\s+/g, ' ').slice(0, 300);
@@ -221,10 +276,15 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
         from: candidate.from || account.email,
         receivedAt: candidate.receivedAt.toISOString(),
         snippet: snippet || '(无正文预览)',
-        textBody: textBody.trim() || undefined,
-        htmlBody: htmlBody || undefined,
-        codeMatch: match
+        textBody: isCodeOnly ? undefined : (textBody.trim() || undefined),
+        htmlBody: isCodeOnly ? undefined : (htmlBody || undefined),
+        codeMatch: match || undefined
       });
+
+      // Optimization Detail 1: Early Termination in code_only mode if high-confidence code is found
+      if (isCodeOnly && match && match.confidence === 'high') {
+        break;
+      }
     }
 
     const primaryCode = matches.sort((left, right) => right.score - left.score || Date.parse(right.receivedAt) - Date.parse(left.receivedAt))[0];
@@ -236,6 +296,8 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
       (account.provider === 'mailcom' || isMailComDomain(account.email.split('@')[1])) &&
       (classified === 'AUTH_FAILED' || classified === 'TIMEOUT' || classified === 'CONNECTION_FAILED')
     ) {
+      const isExplicitImap = options.enginePreference === 'imap_pop3' || account.enginePreference === 'imap_pop3';
+
       try {
         const pop3Account: AccountInput = {
           ...account,
@@ -244,12 +306,20 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
           customProtocol: 'pop3'
         };
         return await fetchAccountVerificationCodeViaPop3(pop3Account, options);
-      } catch {
-        throw new InboxMateError(
-          'MAILCOM_IMAP_DISABLED',
-          401,
-          'Mail.com 账号认证失败：未在网页端开启【POP3 & IMAP Access】选项，或应用密码不正确。'
-        );
+      } catch (popErr: any) {
+        if (isExplicitImap) {
+          throw new InboxMateError(
+            'MAILCOM_IMAP_DISABLED',
+            401,
+            'Mail.com 账号认证失败：未在网页端开启【POP3 & IMAP Access】选项，或应用密码不正确。'
+          );
+        }
+
+        // Smart Auto Fallback: Seamlessly fall back to Chrome Web RPA
+        if (!options.signal.aborted) {
+          options.onProgress('connecting');
+          return await fetchAccountVerificationCodeViaWebRpa(account, options);
+        }
       }
     }
 

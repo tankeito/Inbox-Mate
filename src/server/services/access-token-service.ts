@@ -3,12 +3,17 @@ import { db } from '../db/database.js';
 import { diagLogger } from './diag-logger.js';
 import { usageLogger, type UsageLogItem } from './usage-logger.js';
 
+export type ScopeMode = 'code_only' | 'summary' | 'full';
+export type EnginePreference = 'auto' | 'web_rpa' | 'imap_pop3';
+
 export interface AccessTokenRecord {
   id: string;
   token: string;
   name: string;
   total_quota: number;
   used_quota: number;
+  scope_mode?: string | null;
+  engine_preference?: string | null;
   is_active: number;
   expires_at: string | null;
   created_at: string;
@@ -22,6 +27,8 @@ export interface FormattedAccessToken {
   totalQuota: number;
   usedQuota: number;
   remainingQuota: number;
+  scopeMode: ScopeMode;
+  enginePreference: EnginePreference;
   isActive: boolean;
   isExhausted: boolean;
   expiresAt: string | null;
@@ -32,6 +39,9 @@ export interface FormattedAccessToken {
 function formatToken(row: AccessTokenRecord): FormattedAccessToken {
   const remaining = Math.max(0, row.total_quota - row.used_quota);
   const isExpired = row.expires_at ? new Date(row.expires_at).getTime() < Date.now() : false;
+  const scopeMode: ScopeMode = (row.scope_mode as ScopeMode) || 'code_only';
+  const enginePreference: EnginePreference = (row.engine_preference as EnginePreference) || 'auto';
+
   return {
     id: row.id,
     token: row.token,
@@ -39,6 +49,8 @@ function formatToken(row: AccessTokenRecord): FormattedAccessToken {
     totalQuota: row.total_quota,
     usedQuota: row.used_quota,
     remainingQuota: remaining,
+    scopeMode,
+    enginePreference,
     isActive: Boolean(row.is_active) && !isExpired,
     isExhausted: remaining <= 0,
     expiresAt: row.expires_at,
@@ -55,11 +67,15 @@ export class AccessTokenService {
     name: string;
     totalQuota?: number;
     durationDays?: number | null;
+    scopeMode?: ScopeMode;
+    enginePreference?: EnginePreference;
   }): FormattedAccessToken {
     const id = randomBytes(16).toString('hex');
     const token = `tok_${randomBytes(16).toString('hex')}`;
     const name = params.name.trim() || '通用访问令牌';
     const totalQuota = Math.max(1, Number(params.totalQuota) || 10);
+    const scopeMode: ScopeMode = params.scopeMode || 'code_only';
+    const enginePreference: EnginePreference = params.enginePreference || 'auto';
     const now = new Date().toISOString();
 
     let expiresAt: string | null = null;
@@ -68,16 +84,63 @@ export class AccessTokenService {
     }
 
     const stmt = db.prepare(`
-      INSERT INTO access_tokens (id, token, name, total_quota, used_quota, is_active, expires_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?)
+      INSERT INTO access_tokens (id, token, name, total_quota, used_quota, scope_mode, engine_preference, is_active, expires_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 0, ?, ?, 1, ?, ?, ?)
     `);
-    stmt.run(id, token, name, totalQuota, expiresAt, now, now);
+    stmt.run(id, token, name, totalQuota, scopeMode, enginePreference, expiresAt, now, now);
 
-    diagLogger.info('system', '发行 Token', `管理员生成了新访问令牌 "${name}" (额度: ${totalQuota} 次, Token: ${token.slice(0, 8)}***)`);
+    diagLogger.info('system', '发行 Token', `管理员生成了新访问令牌 "${name}" (额度: ${totalQuota} 次, 范围: ${scopeMode}, 分支: ${enginePreference}, Token: ${token.slice(0, 8)}***)`);
 
     const created = this.getTokenById(id);
     if (!created) throw new Error('Token 创建失败');
     return created;
+  }
+
+  /**
+   * Update permissions & configuration for an existing token
+   */
+  updateToken(
+    id: string,
+    params: {
+      name?: string;
+      totalQuota?: number;
+      durationDays?: number | null;
+      scopeMode?: ScopeMode;
+      enginePreference?: EnginePreference;
+      isActive?: boolean;
+    }
+  ): FormattedAccessToken {
+    const existing = this.getTokenById(id);
+    if (!existing) throw new Error('未找到该 Token');
+
+    const name = params.name !== undefined ? params.name.trim() : existing.name;
+    const totalQuota = params.totalQuota !== undefined ? Math.max(existing.usedQuota, Number(params.totalQuota)) : existing.totalQuota;
+    const scopeMode = params.scopeMode || existing.scopeMode;
+    const enginePreference = params.enginePreference || existing.enginePreference;
+    const isActive = params.isActive !== undefined ? (params.isActive ? 1 : 0) : (existing.isActive ? 1 : 0);
+
+    let expiresAt = existing.expiresAt;
+    if (params.durationDays !== undefined) {
+      if (params.durationDays && params.durationDays > 0) {
+        expiresAt = new Date(Date.now() + params.durationDays * 24 * 60 * 60 * 1000).toISOString();
+      } else {
+        expiresAt = null;
+      }
+    }
+
+    const now = new Date().toISOString();
+    const stmt = db.prepare(`
+      UPDATE access_tokens
+      SET name = ?, total_quota = ?, scope_mode = ?, engine_preference = ?, is_active = ?, expires_at = ?, updated_at = ?
+      WHERE id = ?
+    `);
+    stmt.run(name, totalQuota, scopeMode, enginePreference, isActive, expiresAt, now, id);
+
+    diagLogger.info('system', '更新 Token 权限', `管理员修改了 Token "${name}" 的权限配置 (额度: ${totalQuota}, 范围: ${scopeMode}, 分支: ${enginePreference})`);
+
+    const updated = this.getTokenById(id);
+    if (!updated) throw new Error('Token 更新失败');
+    return updated;
   }
 
   /**
@@ -162,6 +225,55 @@ export class AccessTokenService {
 
     diagLogger.info('system', '充值 Token', `管理员为 Token "${updated.name}" 充值了 +${count} 次 (当前总额度: ${updated.totalQuota} 次)`);
     return updated;
+  }
+
+  /**
+   * Reconcile / Synchronize token used quota with actual successful audit logs count (智能识别对齐)
+   */
+  reconcileTokenQuota(id: string): {
+    token: FormattedAccessToken;
+    reconciledCount: number;
+    previousUsedQuota: number;
+    message: string;
+  } {
+    const token = this.getTokenById(id) || this.getTokenByString(id);
+    if (!token) throw new Error('未找到该 Token');
+
+    // Count actual successful API audit logs for this token
+    const statsStmt = db.prepare(`
+      SELECT COUNT(*) as successCalls
+      FROM usage_logs
+      WHERE (token_id = ? OR token = ? OR token_id = ? OR token = ?)
+        AND (status IN ('success', 'no_code') OR has_code = 1)
+    `);
+    const statsRes = statsStmt.get(token.id, token.token, token.token, token.id) as any;
+    const successCalls = statsRes ? Number(statsRes.successCalls || 0) : 0;
+
+    const previousUsedQuota = token.usedQuota;
+    const now = new Date().toISOString();
+
+    // Update token used_quota to strictly match the successful audit log count
+    const updateStmt = db.prepare(`
+      UPDATE access_tokens
+      SET used_quota = ?, updated_at = ?
+      WHERE id = ?
+    `);
+    updateStmt.run(successCalls, now, token.id);
+
+    const updatedToken = this.getTokenById(token.id)!;
+
+    diagLogger.info(
+      'system',
+      '智能识别校准 Token 额度',
+      `管理员触发 Token "${token.name}" 智能校准：已用额度由 ${previousUsedQuota} 次校准为 ${successCalls} 次（与成功 API 审计流水 ${successCalls} 条完全对齐）`
+    );
+
+    return {
+      token: updatedToken,
+      reconciledCount: successCalls,
+      previousUsedQuota,
+      message: `智能识别对齐完成：已用额度已校准为 ${successCalls} 次（剩余可用: ${updatedToken.remainingQuota} 次）`
+    };
   }
 
   /**
