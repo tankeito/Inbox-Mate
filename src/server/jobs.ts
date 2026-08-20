@@ -310,6 +310,7 @@ export class JobManager {
       } else {
         const primaryCode = result && typeof result === 'object' && 'primaryCode' in result ? (result as FetchAccountResult).primaryCode : (result as unknown as CodeMatch);
         const messages = result && typeof result === 'object' && 'messages' in result ? (result as FetchAccountResult).messages : undefined;
+        const engineUsed = result && typeof result === 'object' && 'engineUsed' in result ? (result as FetchAccountResult).engineUsed : (account.input && routeAccountEngine(account.input) === 'web_rpa' ? 'web_rpa' : 'imap');
         account.snapshot.result = primaryCode;
         account.snapshot.messages = messages;
         account.snapshot.error = (messages && messages.length > 0) || primaryCode ? undefined : safeError('NO_MATCH');
@@ -341,7 +342,8 @@ export class JobManager {
           durationMs: Date.now() - startTime,
           messageCount: messages?.length || 0,
           tokenId: job.tokenId,
-          token: job.token
+          token: job.token,
+          engine: engineUsed
         });
       }
     } catch (error) {
@@ -367,6 +369,7 @@ export class JobManager {
         this.setAccountState(job, account, 'failed', safeError('INTERNAL'));
       }
 
+      const failEngine = account.input ? (routeAccountEngine(account.input) === 'web_rpa' ? 'web_rpa' : 'imap') : 'imap';
       usageLogger.record({
         id: traceId,
         clientIp: job.clientIp || '127.0.0.1',
@@ -380,7 +383,8 @@ export class JobManager {
         durationMs,
         messageCount: 0,
         tokenId: job.tokenId,
-        token: job.token
+        token: job.token,
+        engine: failEngine
       });
     } finally {
       clearTimeout(timeout);

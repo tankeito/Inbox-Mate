@@ -14,60 +14,124 @@ class Pop3SocketClient {
 
   async connect(host: string, port: number, timeoutMs = 5000): Promise<string> {
     return new Promise((resolve, reject) => {
-      let connected = false;
+      let settled = false;
+
       const socket = tls.connect({ host, port, servername: host, rejectUnauthorized: false }, () => {
-        connected = true;
+        // Connected
       });
 
       socket.setTimeout(timeoutMs);
       socket.setEncoding('utf8');
+
+      const cleanup = () => {
+        socket.removeListener('data', onData);
+        socket.removeListener('error', onError);
+        socket.removeListener('timeout', onTimeout);
+        socket.removeListener('close', onClose);
+      };
 
       const onData = (data: string) => {
         this.buffer += data;
         if (this.buffer.includes('\r\n')) {
           const line = this.buffer.slice(0, this.buffer.indexOf('\r\n'));
           this.buffer = this.buffer.slice(this.buffer.indexOf('\r\n') + 2);
-          socket.removeListener('data', onData);
-          if (line.startsWith('+OK')) resolve(line);
-          else reject(new InboxMateError('CONNECTION_FAILED', 400, `POP3 服务器响应错误: ${line}`));
+          if (!settled) {
+            settled = true;
+            cleanup();
+            if (line.startsWith('+OK')) resolve(line);
+            else reject(new InboxMateError('CONNECTION_FAILED', 400, `POP3 服务器响应错误: ${line}`));
+          }
+        }
+      };
+
+      const onError = (err: Error) => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(new InboxMateError('CONNECTION_FAILED', 400, `POP3 连接失败: ${err.message}`));
+        }
+      };
+
+      const onTimeout = () => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          try { socket.destroy(); } catch {}
+          reject(new InboxMateError('TIMEOUT', 408, 'POP3 连接超时 (Socket Timeout)'));
+        }
+      };
+
+      const onClose = () => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(new InboxMateError('CONNECTION_FAILED', 400, 'POP3 连接过早关闭'));
         }
       };
 
       socket.on('data', onData);
-      socket.on('error', (err) => {
-        if (!connected) reject(new InboxMateError('CONNECTION_FAILED', 400, `POP3 连接失败: ${err.message}`));
-      });
-      socket.on('timeout', () => {
-        socket.destroy();
-        reject(new InboxMateError('TIMEOUT', 408, 'POP3 连接超时 (3s Socket Timeout)'));
-      });
+      socket.on('error', onError);
+      socket.on('timeout', onTimeout);
+      socket.on('close', onClose);
 
       this.socket = socket;
     });
   }
 
   async sendCommand(cmd: string): Promise<string> {
-    if (!this.socket || this.socket.destroyed) {
+    const socket = this.socket;
+    if (!socket || socket.destroyed) {
       throw new InboxMateError('CONNECTION_FAILED', 400, 'POP3 Socket 已断开');
     }
 
     return new Promise((resolve, reject) => {
       this.buffer = '';
+      let settled = false;
+
+      const cleanup = () => {
+        socket.removeListener('data', onData);
+        socket.removeListener('error', onError);
+        socket.removeListener('close', onClose);
+      };
+
       const onData = (data: string) => {
         this.buffer += data;
         if (this.buffer.includes('\r\n')) {
           const idx = this.buffer.indexOf('\r\n');
           const line = this.buffer.slice(0, idx);
           this.buffer = this.buffer.slice(idx + 2);
-          this.socket?.removeListener('data', onData);
-          resolve(line);
+          if (!settled) {
+            settled = true;
+            cleanup();
+            resolve(line);
+          }
         }
       };
 
-      this.socket?.on('data', onData);
-      this.socket?.write(`${cmd}\r\n`, 'utf8', (err) => {
-        if (err) {
-          this.socket?.removeListener('data', onData);
+      const onError = (err: Error) => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(new InboxMateError('CONNECTION_FAILED', 400, `POP3 指令传输异常: ${err.message}`));
+        }
+      };
+
+      const onClose = () => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(new InboxMateError('CONNECTION_FAILED', 400, 'POP3 连接已关闭'));
+        }
+      };
+
+      socket.on('data', onData);
+      socket.on('error', onError);
+      socket.on('close', onClose);
+
+      socket.write(`${cmd}\r\n`, 'utf8', (err) => {
+        if (err && !settled) {
+          settled = true;
+          cleanup();
           reject(new InboxMateError('CONNECTION_FAILED', 400, `发送 POP3 指令失败: ${err.message}`));
         }
       });
@@ -75,31 +139,62 @@ class Pop3SocketClient {
   }
 
   async retrieveMessage(id: number): Promise<string> {
-    if (!this.socket || this.socket.destroyed) {
+    const socket = this.socket;
+    if (!socket || socket.destroyed) {
       throw new InboxMateError('CONNECTION_FAILED');
     }
 
     return new Promise((resolve, reject) => {
       let content = '';
+      let settled = false;
+
+      const cleanup = () => {
+        socket.removeListener('data', onData);
+        socket.removeListener('error', onError);
+        socket.removeListener('close', onClose);
+      };
+
       const onData = (data: string) => {
         content += data;
-        // POP3 multiline response terminates with CRLF.CRLF (\r\n.\r\n)
         if (content.endsWith('\r\n.\r\n') || content.includes('\r\n.\r\n')) {
-          this.socket?.removeListener('data', onData);
-          const firstLineEnd = content.indexOf('\r\n');
-          const firstLine = content.slice(0, firstLineEnd);
-          if (!firstLine.startsWith('+OK')) {
-            return reject(new InboxMateError('INTERNAL', 500, `POP3 RETR 失败: ${firstLine}`));
+          if (!settled) {
+            settled = true;
+            cleanup();
+            const firstLineEnd = content.indexOf('\r\n');
+            const firstLine = content.slice(0, firstLineEnd);
+            if (!firstLine.startsWith('+OK')) {
+              return reject(new InboxMateError('INTERNAL', 500, `POP3 RETR 失败: ${firstLine}`));
+            }
+            const body = content.slice(firstLineEnd + 2, content.indexOf('\r\n.\r\n'));
+            resolve(body);
           }
-          const body = content.slice(firstLineEnd + 2, content.indexOf('\r\n.\r\n'));
-          resolve(body);
         }
       };
 
-      this.socket?.on('data', onData);
-      this.socket?.write(`RETR ${id}\r\n`, 'utf8', (err) => {
-        if (err) {
-          this.socket?.removeListener('data', onData);
+      const onError = (err: Error) => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(new InboxMateError('CONNECTION_FAILED', 400, `POP3 RETR 异常: ${err.message}`));
+        }
+      };
+
+      const onClose = () => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(new InboxMateError('CONNECTION_FAILED', 400, 'POP3 连接已关闭'));
+        }
+      };
+
+      socket.on('data', onData);
+      socket.on('error', onError);
+      socket.on('close', onClose);
+
+      socket.write(`RETR ${id}\r\n`, 'utf8', (err) => {
+        if (err && !settled) {
+          settled = true;
+          cleanup();
           reject(new InboxMateError('CONNECTION_FAILED', 400, `POP3 RETR 发送失败: ${err.message}`));
         }
       });
@@ -107,13 +202,17 @@ class Pop3SocketClient {
   }
 
   close(): void {
-    if (this.socket && !this.socket.destroyed) {
+    if (this.socket) {
       try {
-        this.socket.write('QUIT\r\n');
+        this.socket.removeAllListeners();
+        if (!this.socket.destroyed) {
+          this.socket.write('QUIT\r\n');
+          this.socket.destroy();
+        }
       } catch {
         // ignore
       }
-      this.socket.destroy();
+      this.socket = null;
     }
   }
 }
@@ -233,7 +332,7 @@ export async function fetchAccountVerificationCodeViaPop3(
     matches.sort((a, b) => b.score - a.score || Date.parse(b.receivedAt) - Date.parse(a.receivedAt));
     const primaryCode = matches[0];
 
-    return { messages: emailItems, primaryCode };
+    return { messages: emailItems, primaryCode, engineUsed: 'pop3' };
   } catch (error) {
     if (error instanceof InboxMateError) throw error;
     throw new InboxMateError('CONNECTION_FAILED', 400, (error as Error).message || 'POP3 连接与接收异常');

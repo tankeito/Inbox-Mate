@@ -23,6 +23,7 @@ export interface UsageLogItem {
   proxyName?: string;
   proxyServer?: string;
   networkMode?: 'proxy' | 'direct';
+  engine?: 'imap' | 'pop3' | 'web_rpa' | 'graph';
   createdAt: string;
 }
 

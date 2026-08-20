@@ -94,6 +94,7 @@ class DatabaseService {
         proxy_name TEXT,
         proxy_server TEXT,
         network_mode TEXT DEFAULT 'direct',
+        engine TEXT DEFAULT 'imap',
         created_at TEXT NOT NULL
       );
 
@@ -262,8 +263,12 @@ class DatabaseService {
       if (!usageColumns.includes('network_mode')) {
         this.db.exec("ALTER TABLE usage_logs ADD COLUMN network_mode TEXT DEFAULT 'direct';");
       }
+      if (!usageColumns.includes('engine')) {
+        this.db.exec("ALTER TABLE usage_logs ADD COLUMN engine TEXT DEFAULT 'imap';");
+      }
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_usage_logs_token_id ON usage_logs(token_id);');
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_usage_logs_token ON usage_logs(token);');
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_usage_logs_engine ON usage_logs(engine);');
 
       const diagColumns = (this.db.prepare('PRAGMA table_info(diagnostic_logs)').all() as any[]).map((c) => c.name);
       if (!diagColumns.includes('trace_id')) {

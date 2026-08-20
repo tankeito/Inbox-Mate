@@ -683,7 +683,8 @@ export class ApiKeyService {
         durationMs,
         messageCount: fetchResult.messages?.length || 0,
         tokenId: verifiedToken?.id || row.token_id || undefined,
-        token: verifiedToken?.token || row.bound_token || undefined
+        token: verifiedToken?.token || row.bound_token || undefined,
+        engine: fetchResult.engineUsed || (provider === 'offilive' ? 'web_rpa' : 'imap')
       });
 
       // Construct slim or full response based on effectiveScope
@@ -758,7 +759,8 @@ export class ApiKeyService {
         durationMs,
         messageCount: 0,
         tokenId: verifiedToken?.id || row.token_id || undefined,
-        token: verifiedToken?.token || row.bound_token || undefined
+        token: verifiedToken?.token || row.bound_token || undefined,
+        engine: effectiveEngine === 'web_rpa' ? 'web_rpa' : (provider === 'offilive' ? 'web_rpa' : 'imap')
       });
 
       diagLogger.error('api', '拉取失败', errMsg, { error: String(err) }, email);

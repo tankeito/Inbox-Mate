@@ -433,4 +433,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  process.on('uncaughtException', (err) => {
+    console.error('[CRITICAL] Uncaught exception in server process:', err);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    console.error('[CRITICAL] Unhandled promise rejection:', reason);
+  });
 }

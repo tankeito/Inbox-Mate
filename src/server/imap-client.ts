@@ -96,6 +96,7 @@ function credentialsFor(account: AccountInput, resolveMicrosoftAccessToken: Fetc
 export interface FetchAccountResult {
   messages: EmailItem[];
   primaryCode?: CodeMatch;
+  engineUsed?: 'imap' | 'pop3' | 'web_rpa' | 'graph';
 }
 
 import { routeAccountEngine } from './engine-router.js';
@@ -288,7 +289,7 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
     }
 
     const primaryCode = matches.sort((left, right) => right.score - left.score || Date.parse(right.receivedAt) - Date.parse(left.receivedAt))[0];
-    return { messages: emailItems, primaryCode };
+    return { messages: emailItems, primaryCode, engineUsed: 'imap' };
   } catch (error) {
     const classified = error instanceof InboxMateError ? error.code : classifyImapError(error, options.signal.aborted);
 
@@ -466,7 +467,8 @@ export async function fetchAccountVerificationCodeViaGraph(
 
   return {
     messages: emailItems,
-    primaryCode
+    primaryCode,
+    engineUsed: 'graph'
   };
 }
 

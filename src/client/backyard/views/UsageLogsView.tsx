@@ -153,12 +153,17 @@ export const UsageLogsView: React.FC = () => {
         pageSize: 50,
         traceId: item.id
       });
-      // 2. If no traces found under traceId (legacy record), fallback to domain/provider
-      if (res.items.length === 0) {
-        res = await backyardApi.getDiagnostics({
+      // 2. If no traces found under traceId, fallback ONLY by exact account email within matching timestamp (+/- 3 minutes)
+      if (res.items.length === 0 && item.emailAccount) {
+        const fallbackRes = await backyardApi.getDiagnostics({
           page: 1,
-          pageSize: 20,
-          search: item.emailDomain || item.provider || ''
+          pageSize: 30,
+          search: item.emailAccount
+        });
+        const logTime = new Date(item.createdAt).getTime();
+        res.items = (fallbackRes.items || []).filter((t) => {
+          const tTime = new Date(t.timestamp).getTime();
+          return Math.abs(tTime - logTime) <= 3 * 60_000;
         });
       }
       // Sort traces in chronological sequence (ascending) for natural timeline reading
@@ -718,18 +723,35 @@ export const UsageLogsView: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="by-detail-cell" title={selectedLog.provider === 'mailcom' ? 'Mail.com 集团 (Chrome RPA 引擎)' : selectedLog.provider === 'offilive' ? 'OffiLive (Chrome RPA 引擎)' : selectedLog.provider}>
+                  <div className="by-detail-cell" title={selectedLog.provider}>
                     <span className="by-detail-label">服务商协议 & 引擎</span>
                     <span
                       className="by-detail-value"
                       style={{
-                        textTransform: 'capitalize',
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis'
                       }}
                     >
-                      {selectedLog.provider === 'mailcom' ? 'Mail.com (Chrome RPA)' : selectedLog.provider === 'offilive' ? 'OffiLive (Chrome RPA)' : selectedLog.provider}
+                      {(() => {
+                        if (selectedLog.engine === 'imap') {
+                          return selectedLog.provider === 'mailcom' ? 'Mail.Com (IMAP 协议)' : `${selectedLog.provider} (IMAP 协议)`;
+                        }
+                        if (selectedLog.engine === 'pop3') {
+                          return selectedLog.provider === 'mailcom' ? 'Mail.Com (POP3 协议)' : `${selectedLog.provider} (POP3 协议)`;
+                        }
+                        if (selectedLog.engine === 'web_rpa') {
+                          return selectedLog.provider === 'mailcom' ? 'Mail.Com (Chrome RPA)' : selectedLog.provider === 'offilive' ? 'OffiLive (Chrome RPA)' : `${selectedLog.provider} (Chrome RPA)`;
+                        }
+                        if (selectedLog.engine === 'graph') {
+                          return 'Microsoft (Graph API)';
+                        }
+                        if (selectedLog.provider === 'offilive') return 'OffiLive (Chrome RPA)';
+                        if (selectedLog.provider === 'mailcom') {
+                          return (selectedLog.durationMs || 0) < 15000 ? 'Mail.Com (IMAP 协议)' : 'Mail.Com (Chrome RPA)';
+                        }
+                        return `${selectedLog.provider} (IMAP 协议)`;
+                      })()}
                     </span>
                     <span
                       style={{
@@ -1064,8 +1086,17 @@ export const UsageLogsView: React.FC = () => {
                       </div>
                     </div>
                   ) : (
-                    <div style={{ padding: '16px', background: 'var(--by-bg-input)', border: '1px solid var(--by-border)', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--by-text-muted)', textAlign: 'center' }}>
-                      本次执行未产生异常轨迹或已完成自动化回收。
+                    <div style={{ padding: '16px', background: 'var(--by-bg-input)', border: '1px solid var(--by-border)', borderRadius: '8px', fontSize: '0.82rem', color: 'var(--by-text-secondary)', textAlign: 'center', lineHeight: '1.6' }}>
+                      {selectedLog.engine === 'imap' || selectedLog.engine === 'pop3' || (selectedLog.provider !== 'offilive' && selectedLog.durationMs < 15000) ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+                          <span style={{ color: 'var(--by-success)', fontWeight: 600 }}>⚡ 标准 IMAP/POP3 协议直连</span>
+                          <span style={{ color: 'var(--by-text-muted)', fontSize: '0.78rem' }}>
+                            本次任务通过标准邮件协议高速读取完成（耗时 {(selectedLog.durationMs / 1000).toFixed(1)}s），无需启动 Chrome 浏览器模拟，抓取过程平稳顺畅且未记录排查日志。
+                          </span>
+                        </div>
+                      ) : (
+                        <span>本次执行未产生异常轨迹或已完成自动化回收。</span>
+                      )}
                     </div>
                   )}
                 </div>

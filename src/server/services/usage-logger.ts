@@ -23,6 +23,7 @@ export interface UsageEvent {
   proxyName?: string;
   proxyServer?: string;
   networkMode?: 'proxy' | 'direct';
+  engine?: 'imap' | 'pop3' | 'web_rpa' | 'graph';
 }
 
 export interface UsageLogItem {
@@ -44,6 +45,7 @@ export interface UsageLogItem {
   proxyName?: string;
   proxyServer?: string;
   networkMode?: 'proxy' | 'direct';
+  engine?: 'imap' | 'pop3' | 'web_rpa' | 'graph';
   createdAt: string;
 }
 
@@ -162,13 +164,18 @@ export class UsageLoggerService {
         networkMode = proxyName ? 'proxy' : 'direct';
       }
 
+      let engine = event.engine;
+      if (!engine) {
+        engine = event.provider === 'offilive' ? 'web_rpa' : 'imap';
+      }
+
       const stmt = db.prepare(`
         INSERT INTO usage_logs (
           id, client_ip, region, email_account, email_domain, provider,
           source_mode, status, status_detail, has_code, extracted_code,
           duration_ms, message_count, token_id, token, proxy_name, proxy_server,
-          network_mode, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          network_mode, engine, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       stmt.run(
@@ -190,6 +197,7 @@ export class UsageLoggerService {
         proxyName || null,
         proxyServer || null,
         networkMode,
+        engine,
         now
       );
     } catch (err) {
@@ -288,6 +296,7 @@ export class UsageLoggerService {
       proxyName: r.proxy_name || undefined,
       proxyServer: r.proxy_server || undefined,
       networkMode: (r.network_mode as any) || (r.proxy_name ? 'proxy' : 'direct'),
+      engine: (r.engine as any) || (r.provider === 'offilive' ? 'web_rpa' : 'imap'),
       createdAt: r.created_at
     }));
 

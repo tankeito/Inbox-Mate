@@ -2475,7 +2475,7 @@ async function fetchOffiLiveAccount(
       traceId
     );
 
-    return { messages, primaryCode };
+    return { messages, primaryCode, engineUsed: 'web_rpa' };
   } catch (error: unknown) {
     if (options.signal.aborted) throw new InboxMateError('CANCELLED');
     const forensics = activePage ? await captureForensicsSnapshot(activePage, 'unknown_error').catch(() => undefined) : undefined;
@@ -2904,7 +2904,7 @@ async function fetchMailComSingleSession(
       attempts: attempt
     }, email, traceId);
 
-    return mapped;
+    return { ...mapped, engineUsed: 'web_rpa' };
   } catch (error) {
     if (options.signal.aborted) throw new InboxMateError('CANCELLED');
     if (error instanceof InboxMateError) {
