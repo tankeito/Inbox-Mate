@@ -21,6 +21,7 @@ import { InboxMateError } from '../errors.js';
 import type { FetchAccountOptions, FetchAccountResult } from '../imap-client.js';
 import { diagLogger } from '../services/diag-logger.js';
 import { proxyService } from '../services/proxy-service.js';
+import { systemSettingsService } from '../services/system-settings-service.js';
 import { domainFromEmail, isOffiLiveDomain } from '../providers.js';
 
 const MAIL_COM_HOME = 'https://www.mail.com';
@@ -332,30 +333,51 @@ async function getSharedBrowser(): Promise<Browser> {
   return browserPromise;
 }
 
-const MAX_CONCURRENT_RPA = 3;
 const rpaWaitQueue: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
 
-async function acquireBrowser(): Promise<Browser> {
-  if (activeRunningAccounts >= MAX_CONCURRENT_RPA) {
+async function acquireBrowser(signal?: AbortSignal): Promise<Browser> {
+  const maxConcurrent = systemSettingsService.getSettings().concurrencyRpaMax || 3;
+
+  if (activeRunningAccounts >= maxConcurrent) {
     diagLogger.info(
       'web_rpa',
       '并发排队',
-      `当前并发数 (${activeRunningAccounts}/${MAX_CONCURRENT_RPA}) 已满，任务进入排队队列 (排队中: ${rpaWaitQueue.length + 1})`
+      `当前并发数 (${activeRunningAccounts}/${maxConcurrent}) 已达上限，任务进入排队队列 (排队中: ${rpaWaitQueue.length + 1})`
     );
+
+    if (signal?.aborted) {
+      throw new InboxMateError('CANCELLED', 499, '任务已取消');
+    }
+
     await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        const idx = rpaWaitQueue.findIndex((item) => item.resolve === resolve);
+        if (idx >= 0) rpaWaitQueue.splice(idx, 1);
+        reject(new InboxMateError('CANCELLED', 499, '任务已取消'));
+      };
+
+      if (signal) {
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      // Queue timeout: generous queue budget to allow preceding batch tasks to finish gracefully
+      const queueTimeoutMs = Math.max(180_000, (systemSettingsService.getSettings().timeoutJobSec || 300) * 1000);
       const timer = setTimeout(() => {
+        if (signal) signal.removeEventListener('abort', onAbort);
         const idx = rpaWaitQueue.findIndex((item) => item.resolve === resolve);
         if (idx >= 0) rpaWaitQueue.splice(idx, 1);
         reject(new InboxMateError('TIMEOUT', 504, '服务器并发任务较多，排队等待超时，请稍后重试'));
-      }, 35_000);
+      }, queueTimeoutMs);
 
       rpaWaitQueue.push({
         resolve: () => {
           clearTimeout(timer);
+          if (signal) signal.removeEventListener('abort', onAbort);
           resolve();
         },
         reject: (err) => {
           clearTimeout(timer);
+          if (signal) signal.removeEventListener('abort', onAbort);
           reject(err);
         }
       });
@@ -377,8 +399,9 @@ async function acquireBrowser(): Promise<Browser> {
 
 async function releaseBrowser(): Promise<void> {
   activeRunningAccounts = Math.max(0, activeRunningAccounts - 1);
+  const maxConcurrent = systemSettingsService.getSettings().concurrencyRpaMax || 3;
 
-  if (rpaWaitQueue.length > 0 && activeRunningAccounts < MAX_CONCURRENT_RPA) {
+  if (rpaWaitQueue.length > 0 && activeRunningAccounts < maxConcurrent) {
     const nextTask = rpaWaitQueue.shift();
     if (nextTask) nextTask.resolve();
   }
@@ -2101,7 +2124,7 @@ async function fetchOffiLiveAccount(
     options.onProgress('authenticating');
     stage = '启动浏览器';
     const startTime = Date.now();
-    const browser = await acquireBrowser();
+    const browser = await acquireBrowser(options.signal);
     browserAcquired = true;
     diagLogger.info(
       'web_rpa',
@@ -2945,7 +2968,7 @@ export async function fetchMailComAccount(
 
   try {
     // Hold 1 browser concurrency semaphore across all retry attempts in this task
-    browser = await acquireBrowser();
+    browser = await acquireBrowser(options.signal);
     browserAcquired = true;
 
     for (let attempt = 1; attempt <= MAILCOM_MAX_ATTEMPTS; attempt += 1) {
