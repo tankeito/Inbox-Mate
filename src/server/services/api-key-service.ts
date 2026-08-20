@@ -8,6 +8,7 @@ import { usageLogger } from './usage-logger.js';
 import { diagLogger } from './diag-logger.js';
 import { accessTokenService } from './access-token-service.js';
 import { systemSettingsService } from './system-settings-service.js';
+import { toLocalStartOfDayIso, toLocalEndOfDayIso } from '../../shared/format-utils.js';
 
 const API_KEY_FETCH_TIMEOUT_MS = 60_000;
 const OFFILIVE_API_KEY_FETCH_TIMEOUT_MS = 285_000;
@@ -324,17 +325,19 @@ export class ApiKeyService {
     }
 
     if ((params as any).startDate && (params as any).startDate.trim()) {
-      const s = (params as any).startDate.trim();
-      const startIso = s.includes('T') ? s : `${s}T00:00:00.000Z`;
-      conditions.push('k.created_at >= ?');
-      args.push(startIso);
+      const startIso = toLocalStartOfDayIso((params as any).startDate);
+      if (startIso) {
+        conditions.push('k.created_at >= ?');
+        args.push(startIso);
+      }
     }
 
     if ((params as any).endDate && (params as any).endDate.trim()) {
-      const e = (params as any).endDate.trim();
-      const endIso = e.includes('T') ? e : `${e}T23:59:59.999Z`;
-      conditions.push('k.created_at <= ?');
-      args.push(endIso);
+      const endIso = toLocalEndOfDayIso((params as any).endDate);
+      if (endIso) {
+        conditions.push('k.created_at <= ?');
+        args.push(endIso);
+      }
     }
 
     const nowIso = new Date().toISOString();
@@ -418,6 +421,25 @@ export class ApiKeyService {
 
   public deleteKey(id: string): void {
     db.prepare('DELETE FROM api_keys WHERE id = ?').run(id);
+  }
+
+  public batchToggleKeyActive(ids: string[], active: boolean): { count: number } {
+    if (!ids || ids.length === 0) return { count: 0 };
+    const now = new Date().toISOString();
+    const placeholders = ids.map(() => '?').join(',');
+    const stmt = db.prepare(`UPDATE api_keys SET is_active = ?, updated_at = ? WHERE id IN (${placeholders})`);
+    const res = stmt.run(active ? 1 : 0, now, ...ids);
+    diagLogger.info('api', '批量切换 API Key 状态', `管理员批量切换了 ${res.changes} 个 API Key 的激活状态为: ${active ? '启用' : '禁用'}`);
+    return { count: Number(res.changes) };
+  }
+
+  public batchDeleteKeys(ids: string[]): { count: number } {
+    if (!ids || ids.length === 0) return { count: 0 };
+    const placeholders = ids.map(() => '?').join(',');
+    const stmt = db.prepare(`DELETE FROM api_keys WHERE id IN (${placeholders})`);
+    const res = stmt.run(...ids);
+    diagLogger.warn('api', '批量删除 API Key', `管理员批量删除了 ${res.changes} 个 API Key`);
+    return { count: Number(res.changes) };
   }
 
   public updateKeyExpiry(id: string, expiresAt: string | null): void {

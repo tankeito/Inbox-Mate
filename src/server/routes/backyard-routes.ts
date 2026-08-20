@@ -376,6 +376,32 @@ export function createBackyardRouter(): express.Router {
     }
   });
 
+  router.post('/keys/batch-toggle', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const { ids, active } = req.body || {};
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: '请提供要批量操作的 API Key ID 列表' });
+      }
+      const result = apiKeyService.batchToggleKeyActive(ids, Boolean(active));
+      res.json({ ok: true, count: result.count, message: `已成功批量${active ? '启用' : '禁用'} ${result.count} 个 API Key` });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '批量切换状态失败' });
+    }
+  });
+
+  router.post('/keys/batch-delete', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const { ids } = req.body || {};
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: '请提供要批量删除的 API Key ID 列表' });
+      }
+      const result = apiKeyService.batchDeleteKeys(ids);
+      res.json({ ok: true, count: result.count, message: `已成功批量删除 ${result.count} 个 API Key` });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '批量删除 API Key 失败' });
+    }
+  });
+
   router.post('/keys/:apiKey/test', requireAdmin, async (req: Request, res: Response) => {
     try {
       const apiKey = firstParam(req.params.apiKey);
@@ -596,6 +622,50 @@ export function createBackyardRouter(): express.Router {
       res.json({ ok: success, message: success ? 'Token 已成功删除' : '未找到该 Token' });
     } catch (err: any) {
       res.status(400).json({ error: err.message || '删除 Token 失败' });
+    }
+  });
+
+  router.post('/tokens/batch-toggle', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const { ids, isActive } = req.body || {};
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: '请提供要批量操作的 Token ID 列表' });
+      }
+      const result = accessTokenService.batchSetTokensActive(ids, Boolean(isActive));
+      res.json({ ok: true, count: result.count, message: `已成功批量${isActive ? '启用' : '冻结'} ${result.count} 个 Token` });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '批量切换 Token 状态失败' });
+    }
+  });
+
+  router.post('/tokens/batch-delete', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const { ids } = req.body || {};
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: '请提供要批量删除的 Token ID 列表' });
+      }
+      const result = accessTokenService.batchDeleteTokens(ids);
+      res.json({ ok: true, count: result.count, message: `已成功批量删除 ${result.count} 个 Token` });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '批量删除 Token 失败' });
+    }
+  });
+
+  router.post('/tokens/batch-reconcile', requireAdmin, (req: Request, res: Response) => {
+    try {
+      const { ids } = req.body || {};
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: '请提供要批量智能识别的 Token ID 列表' });
+      }
+      const result = accessTokenService.batchReconcileTokens(ids);
+      res.json({
+        ok: true,
+        count: result.count,
+        results: result.results,
+        message: `批量智能识别核销完成！共成功校准 ${result.count} 个 Token 的已用额度`
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || '批量智能识别校准失败' });
     }
   });
 

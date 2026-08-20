@@ -250,6 +250,20 @@ export const backyardApi = {
     return request<{ ok: boolean }>(`/keys/${id}`, { method: 'DELETE' });
   },
 
+  async batchToggleKeys(ids: string[], active: boolean) {
+    return request<{ ok: boolean; count: number; message: string }>('/keys/batch-toggle', {
+      method: 'POST',
+      body: JSON.stringify({ ids, active })
+    });
+  },
+
+  async batchDeleteKeys(ids: string[]) {
+    return request<{ ok: boolean; count: number; message: string }>('/keys/batch-delete', {
+      method: 'POST',
+      body: JSON.stringify({ ids })
+    });
+  },
+
   async testApiKey(apiKey: string) {
     return request<any>(`/keys/${apiKey}/test`, { method: 'POST' });
   },
@@ -395,6 +409,32 @@ export const backyardApi = {
       message: string;
     }>(`/tokens/${id}/reconcile`, {
       method: 'POST'
+    });
+  },
+
+  async batchToggleTokens(ids: string[], isActive: boolean) {
+    return request<{ ok: boolean; count: number; message: string }>('/tokens/batch-toggle', {
+      method: 'POST',
+      body: JSON.stringify({ ids, isActive })
+    });
+  },
+
+  async batchDeleteTokens(ids: string[]) {
+    return request<{ ok: boolean; count: number; message: string }>('/tokens/batch-delete', {
+      method: 'POST',
+      body: JSON.stringify({ ids })
+    });
+  },
+
+  async batchReconcileTokens(ids: string[]) {
+    return request<{
+      ok: boolean;
+      count: number;
+      results: Array<{ id: string; name: string; reconciledCount: number; previousUsedQuota: number; remainingQuota: number }>;
+      message: string;
+    }>('/tokens/batch-reconcile', {
+      method: 'POST',
+      body: JSON.stringify({ ids })
     });
   },
 

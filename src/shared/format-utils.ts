@@ -83,3 +83,42 @@ export function getDateRangePreset(preset: DatePreset): { startDate: string; end
       return { startDate: '', endDate: '' };
   }
 }
+
+/**
+ * Safely converts a date string (YYYY-MM-DD or YYYY/MM/DD or ISO) into UTC ISO string for start-of-day in local timezone:
+ * e.g. '2026-08-20' -> '2026-08-19T16:00:00.000Z' (in UTC+8)
+ */
+export function toLocalStartOfDayIso(dateStr?: string | null): string | null {
+  if (!dateStr || !dateStr.trim()) return null;
+  const s = dateStr.trim();
+  if (s.includes('T')) return s;
+
+  const parts = s.split(/[-/]/).map(Number);
+  if (parts.length < 3 || Number.isNaN(parts[0]) || Number.isNaN(parts[1]) || Number.isNaN(parts[2])) {
+    return null;
+  }
+  const [year, month, day] = parts;
+  const localDate = new Date(year, month - 1, day, 0, 0, 0, 0);
+  if (Number.isNaN(localDate.getTime())) return null;
+  return localDate.toISOString();
+}
+
+/**
+ * Safely converts a date string (YYYY-MM-DD or YYYY/MM/DD or ISO) into UTC ISO string for end-of-day in local timezone:
+ * e.g. '2026-08-20' -> '2026-08-20T15:59:59.999Z' (in UTC+8)
+ */
+export function toLocalEndOfDayIso(dateStr?: string | null): string | null {
+  if (!dateStr || !dateStr.trim()) return null;
+  const s = dateStr.trim();
+  if (s.includes('T')) return s;
+
+  const parts = s.split(/[-/]/).map(Number);
+  if (parts.length < 3 || Number.isNaN(parts[0]) || Number.isNaN(parts[1]) || Number.isNaN(parts[2])) {
+    return null;
+  }
+  const [year, month, day] = parts;
+  const localDate = new Date(year, month - 1, day, 23, 59, 59, 999);
+  if (Number.isNaN(localDate.getTime())) return null;
+  return localDate.toISOString();
+}
+

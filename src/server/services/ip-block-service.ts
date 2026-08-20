@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { db } from '../db/database.js';
 import { diagLogger } from './diag-logger.js';
 import { geoIpService } from './geo-ip-service.js';
+import { toLocalStartOfDayIso, toLocalEndOfDayIso } from '../../shared/format-utils.js';
 
 export interface BlockedIpItem {
   id: string;
@@ -251,17 +252,19 @@ class IpBlockService {
     const args: any[] = [];
 
     if (params?.startDate && params.startDate.trim()) {
-      const s = params.startDate.trim();
-      const startIso = s.includes('T') ? s : `${s}T00:00:00.000Z`;
-      conditions.push('created_at >= ?');
-      args.push(startIso);
+      const startIso = toLocalStartOfDayIso(params.startDate);
+      if (startIso) {
+        conditions.push('created_at >= ?');
+        args.push(startIso);
+      }
     }
 
     if (params?.endDate && params.endDate.trim()) {
-      const e = params.endDate.trim();
-      const endIso = e.includes('T') ? e : `${e}T23:59:59.999Z`;
-      conditions.push('created_at <= ?');
-      args.push(endIso);
+      const endIso = toLocalEndOfDayIso(params.endDate);
+      if (endIso) {
+        conditions.push('created_at <= ?');
+        args.push(endIso);
+      }
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';

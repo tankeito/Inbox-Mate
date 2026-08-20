@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { db } from '../db/database.js';
 import { diagLogger } from './diag-logger.js';
 import { usageLogger, type UsageLogItem } from './usage-logger.js';
+import { toLocalStartOfDayIso, toLocalEndOfDayIso } from '../../shared/format-utils.js';
 
 export type ScopeMode = 'code_only' | 'summary' | 'full';
 export type EnginePreference = 'auto' | 'web_rpa' | 'imap_pop3';
@@ -307,6 +308,65 @@ export class AccessTokenService {
   }
 
   /**
+   * Batch toggle tokens active state
+   */
+  batchSetTokensActive(ids: string[], isActive: boolean): { count: number } {
+    if (!ids || ids.length === 0) return { count: 0 };
+    const now = new Date().toISOString();
+    const placeholders = ids.map(() => '?').join(',');
+    const stmt = db.prepare(`
+      UPDATE access_tokens
+      SET is_active = ?, updated_at = ?
+      WHERE id IN (${placeholders})
+    `);
+    const res = stmt.run(isActive ? 1 : 0, now, ...ids);
+    diagLogger.info(
+      'system',
+      '批量切换 Token 状态',
+      `管理员批量将 ${res.changes} 个 Token 状态切换为: ${isActive ? '启用' : '冻结'}`
+    );
+    return { count: Number(res.changes) };
+  }
+
+  /**
+   * Batch delete tokens
+   */
+  batchDeleteTokens(ids: string[]): { count: number } {
+    if (!ids || ids.length === 0) return { count: 0 };
+    const placeholders = ids.map(() => '?').join(',');
+    const stmt = db.prepare(`DELETE FROM access_tokens WHERE id IN (${placeholders})`);
+    const res = stmt.run(...ids);
+    diagLogger.warn('system', '批量删除 Token', `管理员批量删除了 ${res.changes} 个 Token`);
+    return { count: Number(res.changes) };
+  }
+
+  /**
+   * Batch reconcile token quotas
+   */
+  batchReconcileTokens(ids: string[]): {
+    count: number;
+    results: Array<{ id: string; name: string; reconciledCount: number; previousUsedQuota: number; remainingQuota: number }>;
+  } {
+    if (!ids || ids.length === 0) return { count: 0, results: [] };
+    const results: Array<{ id: string; name: string; reconciledCount: number; previousUsedQuota: number; remainingQuota: number }> = [];
+    for (const id of ids) {
+      try {
+        const res = this.reconcileTokenQuota(id);
+        results.push({
+          id: res.token.id,
+          name: res.token.name,
+          reconciledCount: res.reconciledCount,
+          previousUsedQuota: res.previousUsedQuota,
+          remainingQuota: res.token.remainingQuota
+        });
+      } catch (err) {
+        console.error(`Failed to reconcile token ${id}:`, err);
+      }
+    }
+    return { count: results.length, results };
+  }
+
+  /**
    * List tokens with pagination & optional search
    */
   listTokens(params?: {
@@ -343,17 +403,19 @@ export class AccessTokenService {
     }
 
     if (params?.startDate && params.startDate.trim()) {
-      const s = params.startDate.trim();
-      const startIso = s.includes('T') ? s : `${s}T00:00:00.000Z`;
-      conditions.push('created_at >= ?');
-      queryParams.push(startIso);
+      const startIso = toLocalStartOfDayIso(params.startDate);
+      if (startIso) {
+        conditions.push('created_at >= ?');
+        queryParams.push(startIso);
+      }
     }
 
     if (params?.endDate && params.endDate.trim()) {
-      const e = params.endDate.trim();
-      const endIso = e.includes('T') ? e : `${e}T23:59:59.999Z`;
-      conditions.push('created_at <= ?');
-      queryParams.push(endIso);
+      const endIso = toLocalEndOfDayIso(params.endDate);
+      if (endIso) {
+        conditions.push('created_at <= ?');
+        queryParams.push(endIso);
+      }
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -438,17 +500,19 @@ export class AccessTokenService {
     const baseArgs: any[] = [token.id, token.token, token.token, token.id];
 
     if (params?.startDate && params.startDate.trim()) {
-      const s = params.startDate.trim();
-      const startIso = s.includes('T') ? s : `${s}T00:00:00.000Z`;
-      baseConditions.push('created_at >= ?');
-      baseArgs.push(startIso);
+      const startIso = toLocalStartOfDayIso(params.startDate);
+      if (startIso) {
+        baseConditions.push('created_at >= ?');
+        baseArgs.push(startIso);
+      }
     }
 
     if (params?.endDate && params.endDate.trim()) {
-      const e = params.endDate.trim();
-      const endIso = e.includes('T') ? e : `${e}T23:59:59.999Z`;
-      baseConditions.push('created_at <= ?');
-      baseArgs.push(endIso);
+      const endIso = toLocalEndOfDayIso(params.endDate);
+      if (endIso) {
+        baseConditions.push('created_at <= ?');
+        baseArgs.push(endIso);
+      }
     }
 
     const baseWhereClause = `WHERE ${baseConditions.join(' AND ')}`;

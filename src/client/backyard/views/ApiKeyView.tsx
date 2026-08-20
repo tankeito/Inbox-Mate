@@ -7,6 +7,8 @@ import {
   Copy,
   Check,
   Trash2,
+  Lock,
+  Unlock,
   Play,
   Clock,
   ShieldAlert,
@@ -52,8 +54,11 @@ export const ApiKeyView: React.FC = () => {
   const [endDate, setEndDate] = useState('');
   const [activePreset, setActivePreset] = useState<DatePreset | 'custom' | null>(null);
 
-  // Selection for Batch Export
+  // Selection for Batch Export & Actions
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [showBatchDeleteModal, setShowBatchDeleteModal] = useState(false);
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   // Modals
@@ -193,11 +198,50 @@ export const ApiKeyView: React.FC = () => {
     try {
       await backyardApi.deleteKey(keyToDelete.id);
       setKeyToDelete(null);
+      setToastMessage({ type: 'success', text: 'API Key 已成功删除' });
+      setTimeout(() => setToastMessage(null), 4000);
       fetchKeys();
     } catch (err: any) {
       setErrorMsg(err.message || '删除失败');
     } finally {
       setDeleteLoading(false);
+    }
+  };
+
+  // Batch Toggle Active
+  const handleBatchToggle = async (active: boolean) => {
+    if (selectedIds.length === 0) return;
+    setBatchLoading(true);
+    try {
+      const res = await backyardApi.batchToggleKeys(selectedIds, active);
+      setToastMessage({ type: 'success', text: res.message });
+      setTimeout(() => setToastMessage(null), 4000);
+      setSelectedIds([]);
+      fetchKeys();
+    } catch (err: any) {
+      setToastMessage({ type: 'error', text: err.message || '批量切换状态失败' });
+      setTimeout(() => setToastMessage(null), 4000);
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  // Batch Delete
+  const handleBatchDelete = async () => {
+    if (selectedIds.length === 0) return;
+    setBatchLoading(true);
+    try {
+      const res = await backyardApi.batchDeleteKeys(selectedIds);
+      setToastMessage({ type: 'success', text: res.message });
+      setTimeout(() => setToastMessage(null), 4000);
+      setSelectedIds([]);
+      setShowBatchDeleteModal(false);
+      fetchKeys();
+    } catch (err: any) {
+      setToastMessage({ type: 'error', text: err.message || '批量删除失败' });
+      setTimeout(() => setToastMessage(null), 4000);
+    } finally {
+      setBatchLoading(false);
     }
   };
 
@@ -486,12 +530,134 @@ export const ApiKeyView: React.FC = () => {
         </div>
       </div>
 
+      {/* Toast Message Banner */}
+      {toastMessage && (
+        <div style={{
+          padding: '12px 16px',
+          borderRadius: '8px',
+          background: toastMessage.type === 'success' ? 'var(--by-success-bg)' : 'var(--by-danger-bg)',
+          border: `1px solid ${toastMessage.type === 'success' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(244, 63, 94, 0.3)'}`,
+          color: toastMessage.type === 'success' ? 'var(--by-success)' : 'var(--by-danger)',
+          fontSize: '0.88rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between'
+        }}>
+          <span>{toastMessage.text}</span>
+          <button className="by-btn-icon" onClick={() => setToastMessage(null)} style={{ padding: '2px' }}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Batch Action Bar */}
+      {selectedIds.length > 0 && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '12px',
+          padding: '12px 18px',
+          borderRadius: '10px',
+          background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(168, 85, 247, 0.12))',
+          border: '1px solid rgba(99, 102, 241, 0.3)',
+          boxShadow: 'var(--by-shadow-md)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '24px',
+              height: '24px',
+              borderRadius: '50%',
+              background: 'var(--by-primary)',
+              color: '#fff',
+              fontSize: '0.78rem',
+              fontWeight: 700
+            }}>
+              {selectedIds.length}
+            </span>
+            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--by-text-primary)' }}>
+              已勾选 <strong style={{ color: 'var(--by-primary)' }}>{selectedIds.length}</strong> 个 API Key
+            </span>
+            <button
+              type="button"
+              className="by-btn by-btn-secondary by-btn-sm"
+              style={{ height: '26px', padding: '0 8px', fontSize: '0.74rem' }}
+              onClick={() => setSelectedIds([])}
+            >
+              取消选择
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="by-btn by-btn-secondary by-btn-sm"
+              style={{ height: '30px', padding: '0 10px', fontSize: '0.8rem', gap: '4px' }}
+              onClick={() => handleBatchToggle(true)}
+              disabled={batchLoading}
+            >
+              <Unlock size={13} color="var(--by-success)" />
+              <span>批量启用</span>
+            </button>
+
+            <button
+              type="button"
+              className="by-btn by-btn-secondary by-btn-sm"
+              style={{ height: '30px', padding: '0 10px', fontSize: '0.8rem', gap: '4px' }}
+              onClick={() => handleBatchToggle(false)}
+              disabled={batchLoading}
+            >
+              <Lock size={13} color="var(--by-warning)" />
+              <span>批量禁用</span>
+            </button>
+
+            <button
+              type="button"
+              className="by-btn by-btn-danger by-btn-sm"
+              style={{ height: '30px', padding: '0 12px', fontSize: '0.8rem', gap: '4px' }}
+              onClick={() => setShowBatchDeleteModal(true)}
+              disabled={batchLoading}
+            >
+              <Trash2 size={13} />
+              <span>批量删除</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Keys Table / Mobile Cards */}
       <div className="by-card" style={{ padding: '0', overflow: 'hidden' }}>
         <div className="by-table-wrapper mobile-card-view">
           <table className="by-table">
             <thead>
               <tr>
+                <th style={{ width: '42px', textAlign: 'center', padding: '10px 8px' }}>
+                  <input
+                    type="checkbox"
+                    className="by-checkbox"
+                    style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                    checked={keys.length > 0 && keys.every((k) => selectedIds.includes(k.id))}
+                    ref={(el) => {
+                      if (el) {
+                        const hasSome = keys.some((k) => selectedIds.includes(k.id));
+                        const hasAll = keys.length > 0 && keys.every((k) => selectedIds.includes(k.id));
+                        el.indeterminate = hasSome && !hasAll;
+                      }
+                    }}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        const newIds = Array.from(new Set([...selectedIds, ...keys.map((k) => k.id)]));
+                        setSelectedIds(newIds);
+                      } else {
+                        setSelectedIds(selectedIds.filter((id) => !keys.some((k) => k.id === id)));
+                      }
+                    }}
+                  />
+                </th>
                 <th>邮箱账号</th>
                 <th>服务商</th>
                 <th>绑定授权 Token</th>
@@ -506,14 +672,14 @@ export const ApiKeyView: React.FC = () => {
             <tbody>
               {loading && keys.length === 0 ? (
                 <tr>
-                  <td colSpan={9} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-secondary)' }}>
+                  <td colSpan={10} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-secondary)' }}>
                     <RefreshCw size={20} className="animate-spin" style={{ margin: '0 auto 8px auto' }} />
                     正在载入 API Key 列表...
                   </td>
                 </tr>
               ) : keys.length === 0 ? (
                 <tr>
-                  <td colSpan={9} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-muted)' }}>
+                  <td colSpan={10} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-muted)' }}>
                     暂无 API Key，请点击右上角【批量导入生成】快速生成
                   </td>
                 </tr>
@@ -526,6 +692,21 @@ export const ApiKeyView: React.FC = () => {
 
                   return (
                     <tr key={item.id}>
+                      <td style={{ textAlign: 'center', padding: '10px 8px', width: '42px' }} onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          className="by-checkbox"
+                          style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                          checked={selectedIds.includes(item.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedIds([...selectedIds, item.id]);
+                            } else {
+                              setSelectedIds(selectedIds.filter((id) => id !== item.id));
+                            }
+                          }}
+                        />
+                      </td>
                       <td data-label="邮箱账号">
                         <div style={{ display: 'flex', flexDirection: 'column' }}>
                           <span style={{ fontWeight: 600, color: 'var(--by-text-primary)' }}>{item.accountEmail}</span>
@@ -1319,6 +1500,26 @@ export const ApiKeyView: React.FC = () => {
         loading={deleteLoading}
         onConfirm={handleConfirmDeleteKey}
         onClose={() => setKeyToDelete(null)}
+      />
+
+      {/* Batch Delete API Keys Confirm Modal */}
+      <ConfirmModal
+        isOpen={showBatchDeleteModal}
+        title="批量删除 API Key"
+        message={
+          <div>
+            确定要批量删除选中的 <strong style={{ color: 'var(--by-danger)' }}>{selectedIds.length}</strong> 个 API Key 吗？
+            <div style={{ marginTop: '8px', fontSize: '0.8rem', color: 'var(--by-danger)' }}>
+              ⚠️ 此操作不可撤销，删除后对应的所有 API 接口访问地址将立即失效！
+            </div>
+          </div>
+        }
+        confirmText="确认批量删除"
+        cancelText="取消"
+        variant="danger"
+        loading={batchLoading}
+        onConfirm={handleBatchDelete}
+        onClose={() => setShowBatchDeleteModal(false)}
       />
     </div>
   );

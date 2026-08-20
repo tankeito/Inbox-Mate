@@ -101,6 +101,17 @@ export const TokensView: React.FC = () => {
     message: string;
   } | null>(null);
 
+  // Batch Operations State
+  const [selectedTokenIds, setSelectedTokenIds] = useState<string[]>([]);
+  const [showBatchDeleteModal, setShowBatchDeleteModal] = useState(false);
+  const [showBatchReconcileModal, setShowBatchReconcileModal] = useState(false);
+  const [batchReconcileResult, setBatchReconcileResult] = useState<{
+    count: number;
+    results: Array<{ id: string; name: string; reconciledCount: number; previousUsedQuota: number; remainingQuota: number }>;
+    message: string;
+  } | null>(null);
+  const [batchLoading, setBatchLoading] = useState(false);
+
   const fetchTokens = async () => {
     try {
       setLoading(true);
@@ -363,6 +374,66 @@ export const TokensView: React.FC = () => {
     }
   };
 
+  // Batch Toggle Active
+  const handleBatchToggle = async (isActive: boolean) => {
+    if (selectedTokenIds.length === 0) return;
+    setBatchLoading(true);
+    try {
+      const res = await backyardApi.batchToggleTokens(selectedTokenIds, isActive);
+      setToastMessage({ type: 'success', text: res.message });
+      setTimeout(() => setToastMessage(null), 4000);
+      setSelectedTokenIds([]);
+      fetchTokens();
+    } catch (err: any) {
+      setToastMessage({ type: 'error', text: err.message || '批量切换状态失败' });
+      setTimeout(() => setToastMessage(null), 4000);
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  // Batch Delete
+  const handleBatchDelete = async () => {
+    if (selectedTokenIds.length === 0) return;
+    setBatchLoading(true);
+    try {
+      const res = await backyardApi.batchDeleteTokens(selectedTokenIds);
+      setToastMessage({ type: 'success', text: res.message });
+      setTimeout(() => setToastMessage(null), 4000);
+      setSelectedTokenIds([]);
+      setShowBatchDeleteModal(false);
+      fetchTokens();
+    } catch (err: any) {
+      setToastMessage({ type: 'error', text: err.message || '批量删除失败' });
+      setTimeout(() => setToastMessage(null), 4000);
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  // Batch Reconcile
+  const handleOpenBatchReconcile = () => {
+    setBatchReconcileResult(null);
+    setShowBatchReconcileModal(true);
+  };
+
+  const handleConfirmBatchReconcile = async () => {
+    if (selectedTokenIds.length === 0) return;
+    setBatchLoading(true);
+    try {
+      const res = await backyardApi.batchReconcileTokens(selectedTokenIds);
+      setBatchReconcileResult(res);
+      setToastMessage({ type: 'success', text: res.message });
+      setTimeout(() => setToastMessage(null), 4000);
+      fetchTokens();
+    } catch (err: any) {
+      setToastMessage({ type: 'error', text: err.message || '批量智能识别校准失败' });
+      setTimeout(() => setToastMessage(null), 4000);
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', paddingBottom: '32px' }}>
       {/* Top Header */}
@@ -483,12 +554,134 @@ export const TokensView: React.FC = () => {
         </div>
       </div>
 
+      {/* Batch Action Bar */}
+      {selectedTokenIds.length > 0 && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '12px',
+          padding: '12px 18px',
+          borderRadius: '10px',
+          background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(168, 85, 247, 0.12))',
+          border: '1px solid rgba(99, 102, 241, 0.3)',
+          boxShadow: 'var(--by-shadow-md)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '24px',
+              height: '24px',
+              borderRadius: '50%',
+              background: 'var(--by-primary)',
+              color: '#fff',
+              fontSize: '0.78rem',
+              fontWeight: 700
+            }}>
+              {selectedTokenIds.length}
+            </span>
+            <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--by-text-primary)' }}>
+              已勾选 <strong style={{ color: 'var(--by-primary)' }}>{selectedTokenIds.length}</strong> 个 Token
+            </span>
+            <button
+              type="button"
+              className="by-btn by-btn-secondary by-btn-sm"
+              style={{ height: '26px', padding: '0 8px', fontSize: '0.74rem' }}
+              onClick={() => setSelectedTokenIds([])}
+            >
+              取消选择
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="by-btn by-btn-secondary by-btn-sm"
+              style={{
+                height: '30px',
+                padding: '0 12px',
+                fontSize: '0.8rem',
+                color: 'var(--by-primary)',
+                borderColor: 'var(--by-primary)',
+                background: 'rgba(99, 102, 241, 0.08)',
+                fontWeight: 600,
+                gap: '5px'
+              }}
+              onClick={handleOpenBatchReconcile}
+              disabled={batchLoading}
+            >
+              <Sparkles size={14} color="var(--by-primary)" />
+              <span>批量智能识别</span>
+            </button>
+
+            <button
+              type="button"
+              className="by-btn by-btn-secondary by-btn-sm"
+              style={{ height: '30px', padding: '0 10px', fontSize: '0.8rem', gap: '4px' }}
+              onClick={() => handleBatchToggle(true)}
+              disabled={batchLoading}
+            >
+              <Unlock size={13} color="var(--by-success)" />
+              <span>批量启用</span>
+            </button>
+
+            <button
+              type="button"
+              className="by-btn by-btn-secondary by-btn-sm"
+              style={{ height: '30px', padding: '0 10px', fontSize: '0.8rem', gap: '4px' }}
+              onClick={() => handleBatchToggle(false)}
+              disabled={batchLoading}
+            >
+              <Lock size={13} color="var(--by-warning)" />
+              <span>批量冻结</span>
+            </button>
+
+            <button
+              type="button"
+              className="by-btn by-btn-danger by-btn-sm"
+              style={{ height: '30px', padding: '0 12px', fontSize: '0.8rem', gap: '4px' }}
+              onClick={() => setShowBatchDeleteModal(true)}
+              disabled={batchLoading}
+            >
+              <Trash2 size={13} />
+              <span>批量删除</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Token List Table / Card View */}
       <div className="by-card" style={{ padding: 0, overflow: 'hidden' }}>
         <div className="by-table-wrapper mobile-card-view">
           <table className="by-table">
             <thead>
               <tr>
+                <th style={{ width: '42px', textAlign: 'center', padding: '10px 8px' }}>
+                  <input
+                    type="checkbox"
+                    className="by-checkbox"
+                    style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                    checked={tokens.length > 0 && tokens.every((t) => selectedTokenIds.includes(t.id))}
+                    ref={(el) => {
+                      if (el) {
+                        const hasSome = tokens.some((t) => selectedTokenIds.includes(t.id));
+                        const hasAll = tokens.length > 0 && tokens.every((t) => selectedTokenIds.includes(t.id));
+                        el.indeterminate = hasSome && !hasAll;
+                      }
+                    }}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        const newIds = Array.from(new Set([...selectedTokenIds, ...tokens.map((t) => t.id)]));
+                        setSelectedTokenIds(newIds);
+                      } else {
+                        setSelectedTokenIds(selectedTokenIds.filter((id) => !tokens.some((t) => t.id === id)));
+                      }
+                    }}
+                  />
+                </th>
                 <th>Token 密钥凭据</th>
                 <th>使用者备注</th>
                 <th>数据返回权限</th>
@@ -503,14 +696,14 @@ export const TokensView: React.FC = () => {
             <tbody>
               {loading && tokens.length === 0 ? (
                 <tr>
-                  <td colSpan={9} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-secondary)' }}>
+                  <td colSpan={10} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-secondary)' }}>
                     <RefreshCw size={20} className="animate-spin" style={{ margin: '0 auto 8px auto' }} />
                     正在载入 Token 列表...
                   </td>
                 </tr>
               ) : tokens.length === 0 ? (
                 <tr>
-                  <td colSpan={9} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-muted)' }}>
+                  <td colSpan={10} style={{ textAlign: 'center', padding: '40px', color: 'var(--by-text-muted)' }}>
                     暂无授权 Token，点击右上角【发行新 Token】开始创建
                   </td>
                 </tr>
@@ -519,6 +712,21 @@ export const TokensView: React.FC = () => {
                   const percent = Math.min(100, Math.round((item.usedQuota / item.totalQuota) * 100));
                   return (
                     <tr key={item.id}>
+                      <td style={{ textAlign: 'center', padding: '10px 8px', width: '42px' }} onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          className="by-checkbox"
+                          style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                          checked={selectedTokenIds.includes(item.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedTokenIds([...selectedTokenIds, item.id]);
+                            } else {
+                              setSelectedTokenIds(selectedTokenIds.filter((id) => id !== item.id));
+                            }
+                          }}
+                        />
+                      </td>
                       <td data-label="Token 密钥">
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <code style={{ fontFamily: 'var(--by-font-mono)', fontWeight: 700, color: 'var(--by-text-code)', fontSize: '0.84rem' }}>
@@ -1621,6 +1829,186 @@ export const TokensView: React.FC = () => {
                   onClick={() => {
                     setShowReconcileModal(false);
                     setReconcileResult(null);
+                  }}
+                  style={{ width: '100%' }}
+                >
+                  确定并完成
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Delete Modal */}
+      <ConfirmModal
+        isOpen={showBatchDeleteModal}
+        title="批量删除授权 Token"
+        message={
+          <div>
+            确定要批量删除选中的 <strong style={{ color: 'var(--by-danger)' }}>{selectedTokenIds.length}</strong> 个授权 Token 吗？
+            <div style={{ marginTop: '8px', fontSize: '0.8rem', color: 'var(--by-danger)' }}>
+              ⚠️ 此操作不可撤销，删除后使用这些 Token 的所有外部接口调用将立即失效！
+            </div>
+          </div>
+        }
+        confirmText="确认批量删除"
+        cancelText="取消"
+        variant="danger"
+        loading={batchLoading}
+        onConfirm={handleBatchDelete}
+        onClose={() => setShowBatchDeleteModal(false)}
+      />
+
+      {/* Batch Reconcile Modal */}
+      {showBatchReconcileModal && (
+        <div className="by-modal-overlay" style={{ zIndex: 1100 }}>
+          <div className="by-modal" style={{ maxWidth: '580px', width: '92vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+            <div className="by-modal-header" style={{ padding: '16px 20px' }}>
+              <div className="by-modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '1.05rem' }}>
+                <Sparkles size={18} color="var(--by-primary)" /> 批量智能识别与额度校准
+              </div>
+              <button
+                className="by-btn-icon"
+                onClick={() => {
+                  setShowBatchReconcileModal(false);
+                  setBatchReconcileResult(null);
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="by-modal-body" style={{ padding: '16px 20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {!batchReconcileResult ? (
+                <>
+                  <div style={{
+                    padding: '12px 14px',
+                    borderRadius: '8px',
+                    background: 'rgba(99, 102, 241, 0.06)',
+                    border: '1px solid rgba(99, 102, 241, 0.2)',
+                    fontSize: '0.82rem',
+                    lineHeight: '1.55',
+                    color: 'var(--by-text-secondary)'
+                  }}>
+                    <div style={{ fontWeight: 700, color: 'var(--by-primary)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <Activity size={14} /> 批量核销说明：
+                    </div>
+                    <div>
+                      将对已勾选的 <strong>{selectedTokenIds.length}</strong> 个 Token 逐个扫描审计日志中的真实正常成功（验证码/邮件）调用件数，并将各 Token 已用额度与实际成功流水严格校准对齐。
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--by-text-secondary)', marginBottom: '-6px' }}>
+                    待校准 Token 列表 ({selectedTokenIds.length} 项)：
+                  </div>
+
+                  <div style={{ maxHeight: '240px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {tokens
+                      .filter((t) => selectedTokenIds.includes(t.id))
+                      .map((t) => (
+                        <div key={t.id} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '8px 12px',
+                          borderRadius: '6px',
+                          background: 'var(--by-bg-input)',
+                          border: '1px solid var(--by-border)',
+                          fontSize: '0.8rem'
+                        }}>
+                          <div>
+                            <span style={{ fontWeight: 600, color: 'var(--by-text-primary)' }}>{t.name}</span>
+                            <span style={{ marginLeft: '8px', color: 'var(--by-text-muted)', fontFamily: 'var(--by-font-mono)', fontSize: '0.74rem' }}>
+                              ({t.token.slice(0, 10)}...)
+                            </span>
+                          </div>
+                          <div style={{ color: 'var(--by-text-secondary)' }}>
+                            当前已用: <strong style={{ color: 'var(--by-warning)' }}>{t.usedQuota}</strong> / {t.totalQuota} 次
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{
+                    padding: '14px',
+                    borderRadius: '8px',
+                    background: 'rgba(16, 185, 129, 0.08)',
+                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    textAlign: 'center'
+                  }}>
+                    <div style={{ display: 'inline-flex', justifyContent: 'center', alignItems: 'center', width: '38px', height: '38px', borderRadius: '50%', background: 'rgba(16, 185, 129, 0.15)', color: '#10b981', marginBottom: '6px' }}>
+                      <CheckCircle2 size={22} />
+                    </div>
+                    <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--by-text-primary)' }}>
+                      {batchReconcileResult.message}
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--by-text-secondary)', marginBottom: '-4px' }}>
+                    核销对齐明细：
+                  </div>
+
+                  <div style={{ maxHeight: '240px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {batchReconcileResult.results.map((r) => (
+                      <div key={r.id} style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '8px 12px',
+                        borderRadius: '6px',
+                        background: 'var(--by-bg-input)',
+                        border: '1px solid var(--by-border)',
+                        fontSize: '0.8rem'
+                      }}>
+                        <div style={{ fontWeight: 600, color: 'var(--by-text-primary)' }}>{r.name}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '0.78rem' }}>
+                          <span style={{ color: 'var(--by-text-muted)' }}>
+                            原已用: {r.previousUsedQuota} 次 ➔ 校准后已用: <strong style={{ color: 'var(--by-primary)' }}>{r.reconciledCount} 次</strong>
+                          </span>
+                          <span style={{ color: 'var(--by-success)', fontWeight: 600 }}>
+                            剩余: {r.remainingQuota} 次
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="by-modal-footer" style={{ padding: '12px 20px' }}>
+              {!batchReconcileResult ? (
+                <>
+                  <button
+                    type="button"
+                    className="by-btn by-btn-secondary"
+                    onClick={() => setShowBatchReconcileModal(false)}
+                    disabled={batchLoading}
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="by-btn by-btn-primary"
+                    onClick={handleConfirmBatchReconcile}
+                    disabled={batchLoading}
+                    style={{ gap: '6px' }}
+                  >
+                    <Sparkles size={14} className={batchLoading ? 'animate-spin' : ''} />
+                    {batchLoading ? '正在批量核销...' : `确认批量核销 (${selectedTokenIds.length}项)`}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="by-btn by-btn-primary"
+                  onClick={() => {
+                    setShowBatchReconcileModal(false);
+                    setBatchReconcileResult(null);
+                    setSelectedTokenIds([]);
                   }}
                   style={{ width: '100%' }}
                 >
