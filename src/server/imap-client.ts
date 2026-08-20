@@ -112,12 +112,24 @@ export function isKnownImapCapable(email: string): boolean {
   const norm = email.trim().toLowerCase();
   if (knownImapCapableAccounts.has(norm)) return true;
   try {
-    const row = db.prepare(`
+    // 1. Check api_keys table for verified_engine
+    const keyRow = db.prepare(`
+      SELECT id FROM api_keys
+      WHERE LOWER(account_email) = ? AND (verified_engine = 'imap' OR verified_engine = 'pop3')
+      LIMIT 1
+    `).get(norm);
+    if (keyRow) {
+      knownImapCapableAccounts.add(norm);
+      return true;
+    }
+
+    // 2. Check usage_logs table for prior successful IMAP calls (case-insensitive & legacy duration)
+    const logRow = db.prepare(`
       SELECT id FROM usage_logs 
-      WHERE email_account = ? AND engine = 'imap' AND status IN ('success', 'no_code')
+      WHERE LOWER(email_account) = ? AND (engine = 'imap' OR engine = 'pop3' OR (provider != 'offilive' AND duration_ms < 25000)) AND status IN ('success', 'no_code')
       ORDER BY created_at DESC LIMIT 1
     `).get(norm);
-    if (row) {
+    if (logRow) {
       knownImapCapableAccounts.add(norm);
       return true;
     }
@@ -127,6 +139,51 @@ export function isKnownImapCapable(email: string): boolean {
 
 // Mailbox-level concurrency mutex to serialize high-frequency requests on the same mailbox
 const mailboxLocks = new Map<string, Promise<void>>();
+
+// Global IMAP concurrent connection pool controller (Max 80 concurrent IMAP sockets)
+const MAX_GLOBAL_IMAP_CONCURRENCY = 80;
+let activeImapConnections = 0;
+const imapWaitQueue: Array<() => void> = [];
+
+async function acquireImapSlot(signal?: AbortSignal): Promise<() => void> {
+  if (activeImapConnections < MAX_GLOBAL_IMAP_CONCURRENCY) {
+    activeImapConnections++;
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        activeImapConnections--;
+        const next = imapWaitQueue.shift();
+        if (next) next();
+      }
+    };
+  }
+
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      const idx = imapWaitQueue.indexOf(run);
+      if (idx !== -1) imapWaitQueue.splice(idx, 1);
+      reject(new InboxMateError('CANCELLED'));
+    };
+
+    const run = () => {
+      signal?.removeEventListener('abort', onAbort);
+      activeImapConnections++;
+      let released = false;
+      resolve(() => {
+        if (!released) {
+          released = true;
+          activeImapConnections--;
+          const next = imapWaitQueue.shift();
+          if (next) next();
+        }
+      });
+    };
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+    imapWaitQueue.push(run);
+  });
+}
 
 export async function fetchAccountVerificationCode(account: AccountInput, options: FetchAccountOptions): Promise<FetchAccountResult> {
   const engineType = routeAccountEngine(account, options.enginePreference);
@@ -154,6 +211,8 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
     releaseMailboxLock = resolve;
   });
   mailboxLocks.set(emailKey, currentMailboxLock);
+
+  const releaseGlobalSlot = await acquireImapSlot(options.signal);
 
   const provider = PROVIDER_REGISTRY[account.provider];
   const host = account.customHost || provider?.host || `imap.${account.email.split('@')[1]}`;
@@ -382,6 +441,7 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
     if (error instanceof InboxMateError) throw error;
     throw new InboxMateError(classified);
   } finally {
+    releaseGlobalSlot();
     options.signal.removeEventListener('abort', closeOnAbort);
     releaseMailboxLock?.();
     if (mailboxLocks.get(emailKey) === currentMailboxLock) {

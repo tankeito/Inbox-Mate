@@ -135,6 +135,8 @@ class DatabaseService {
         last_used_at TEXT,
         token_id TEXT,
         bound_token TEXT,
+        verified_engine TEXT,
+        imap_fail_count INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -283,7 +285,14 @@ class DatabaseService {
       if (!keyColumns.includes('bound_token')) {
         this.db.exec('ALTER TABLE api_keys ADD COLUMN bound_token TEXT;');
       }
+      if (!keyColumns.includes('verified_engine')) {
+        this.db.exec('ALTER TABLE api_keys ADD COLUMN verified_engine TEXT;');
+      }
+      if (!keyColumns.includes('imap_fail_count')) {
+        this.db.exec('ALTER TABLE api_keys ADD COLUMN imap_fail_count INTEGER NOT NULL DEFAULT 0;');
+      }
       this.db.exec('CREATE INDEX IF NOT EXISTS idx_api_keys_token_id ON api_keys(token_id);');
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_api_keys_verified_engine ON api_keys(verified_engine);');
     } catch {}
   }
 

@@ -3,7 +3,7 @@ import { db } from '../db/database.js';
 import { parseAccountLineSmart } from '../../shared/account-parser.js';
 import { providerForEmail } from '../providers.js';
 import type { AccountInput, EmailItem, ProviderId } from '../../shared/types.js';
-import { fetchAccountVerificationCode } from '../imap-client.js';
+import { fetchAccountVerificationCode, isKnownImapCapable } from '../imap-client.js';
 import { usageLogger } from './usage-logger.js';
 import { diagLogger } from './diag-logger.js';
 import { accessTokenService } from './access-token-service.js';
@@ -126,6 +126,8 @@ export interface ApiKeyPublicResult {
 
 // In-memory 8-second cooldown cache to prevent slamming Chrome RPA / IMAP with automated rapid polling
 const apiKeyCooldownCache = new Map<string, { result: ApiKeyPublicResult; timestamp: number }>();
+// In-flight SingleFlight request deduplication map to merge concurrent queries on the same key/mailbox
+const inFlightApiKeyQueries = new Map<string, Promise<ApiKeyPublicResult>>();
 const API_COOLDOWN_MS = 8000;
 
 export class ApiKeyService {
@@ -581,7 +583,12 @@ export class ApiKeyService {
 
     // Determine effective Engine Preference
     const tokenEngine: 'auto' | 'web_rpa' | 'imap_pop3' = verifiedToken?.enginePreference || 'auto';
-    const effectiveEngine: 'auto' | 'web_rpa' | 'imap_pop3' = options.engine || tokenEngine;
+    let effectiveEngine: 'auto' | 'web_rpa' | 'imap_pop3' = options.engine || tokenEngine;
+
+    // Smart Engine Memory: If this account has already succeeded on IMAP/POP3, lock into imap_pop3
+    if (effectiveEngine === 'auto' && (row.verified_engine === 'imap' || row.verified_engine === 'pop3' || isKnownImapCapable(row.account_email))) {
+      effectiveEngine = 'imap_pop3';
+    }
 
     // Anti-hammering cooldown cache check
     const cooldownMs = systemSettingsService.getSettings().apiCooldownMs;
@@ -594,177 +601,209 @@ export class ApiKeyService {
       };
     }
 
-    let authData: StoredAuthData;
-    try {
-      authData = JSON.parse(decryptSecret(row.encrypted_auth, row.auth_iv, row.auth_tag)) as StoredAuthData;
-    } catch {
-      throw new Error('解密账户凭据失败');
+    // In-Flight Request Deduplication (SingleFlight: Merge concurrent identical requests to avoid socket storm)
+    const inFlightKey = `${apiKey}:${effectiveScope}:${effectiveEngine}`;
+    const pendingQuery = inFlightApiKeyQueries.get(inFlightKey);
+    if (pendingQuery) {
+      return pendingQuery;
     }
 
-    const email = row.account_email;
-    const provider = row.provider as ProviderId;
+    const executeTask = async (): Promise<ApiKeyPublicResult> => {
+      let authData: StoredAuthData;
+      try {
+        authData = JSON.parse(decryptSecret(row.encrypted_auth, row.auth_iv, row.auth_tag)) as StoredAuthData;
+      } catch {
+        throw new Error('解密账户凭据失败');
+      }
 
-    let accountInput: AccountInput;
-    if (authData.refreshToken) {
-      accountInput = {
-        clientAccountId: row.id,
-        email,
-        provider,
-        auth: { type: 'refresh_token', refreshToken: authData.refreshToken }
-      };
-    } else {
-      accountInput = {
-        clientAccountId: row.id,
-        email,
-        provider,
-        auth: { type: 'app_password', secret: authData.password || '' },
-        customHost: authData.customHost,
-        customPort: authData.customPort,
-        customProtocol: authData.customProtocol
-      };
-    }
+      const email = row.account_email;
+      const provider = row.provider as ProviderId;
 
-    const traceId = randomUUID();
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), resolveApiKeyFetchTimeoutMs(provider));
-
-    diagLogger.info('api', '接收请求', `收到 API Key 邮件拉取请求 (${email}) [范围: ${effectiveScope}, 分支: ${effectiveEngine}]`, { apiKey, clientIp: options.clientIp, traceId }, email, traceId);
-
-    try {
-      const fetchResult = await fetchAccountVerificationCode(accountInput, {
-        lookbackMinutes: typeof options.lookbackMinutes === 'number' ? options.lookbackMinutes : 0,
-        maxMessages: typeof options.maxMessages === 'number' && options.maxMessages > 0 ? options.maxMessages : 10,
-        signal: controller.signal,
-        traceId,
-        scopeMode: effectiveScope,
-        enginePreference: effectiveEngine,
-        onProgress: (state) => {
-          diagLogger.debug('api', `进度: ${state}`, `正在执行 ${state}`, undefined, email, traceId);
-        },
-        resolveMicrosoftAccessToken: () => {
-          throw new Error('OAuth 会话不可用于直接 API Key 调用，请使用 Refresh Token 或应用密码');
-        }
-      });
-
-      clearTimeout(timeout);
-      const durationMs = Date.now() - startTime;
-      const primaryCode = fetchResult.primaryCode;
-      const codeStr = primaryCode ? primaryCode.code : null;
-
-      // Update call count and last used
-      const nowIso = new Date().toISOString();
-      db.prepare('UPDATE api_keys SET call_count = call_count + 1, last_used_at = ? WHERE id = ?').run(nowIso, row.id);
-
-      // Post-execution quota deduction (Deduct on all successful API calls using a verified token)
-      let tokenInfoPayload: any = undefined;
-      if (verifiedToken) {
-        accessTokenService.consumeQuota(verifiedToken.id);
-        tokenInfoPayload = {
-          name: verifiedToken.name,
-          usedQuota: verifiedToken.usedQuota + 1,
-          totalQuota: verifiedToken.totalQuota,
-          remainingQuota: Math.max(0, verifiedToken.remainingQuota - 1),
-          scopeMode: effectiveScope,
-          enginePreference: effectiveEngine
+      let accountInput: AccountInput;
+      if (authData.refreshToken) {
+        accountInput = {
+          clientAccountId: row.id,
+          email,
+          provider,
+          auth: { type: 'refresh_token', refreshToken: authData.refreshToken }
+        };
+      } else {
+        accountInput = {
+          clientAccountId: row.id,
+          email,
+          provider,
+          auth: { type: 'app_password', secret: authData.password || '' },
+          customHost: authData.customHost,
+          customPort: authData.customPort,
+          customProtocol: authData.customProtocol
         };
       }
 
-      // Record usage log
-      usageLogger.record({
-        id: traceId,
-        clientIp: options.clientIp,
-        region: options.region,
-        emailAccount: email,
-        provider,
-        sourceMode: 'api_key',
-        status: codeStr ? 'success' : 'no_code',
-        hasCode: Boolean(codeStr),
-        extractedCode: codeStr || undefined,
-        durationMs,
-        messageCount: fetchResult.messages?.length || 0,
-        tokenId: verifiedToken?.id || row.token_id || undefined,
-        token: verifiedToken?.token || row.bound_token || undefined,
-        engine: fetchResult.engineUsed || (provider === 'offilive' ? 'web_rpa' : 'imap')
-      });
+      const traceId = randomUUID();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), resolveApiKeyFetchTimeoutMs(provider));
 
-      // Construct slim or full response based on effectiveScope
-      let messagesOutput: any = undefined;
-      if (effectiveScope === 'summary') {
-        messagesOutput = (fetchResult.messages || []).map((m) => ({
-          id: m.id,
-          subject: m.subject,
-          from: m.from,
-          receivedAt: m.receivedAt,
-          snippet: m.snippet,
-          hasCode: Boolean(m.codeMatch),
-          extractedCode: m.codeMatch?.code
-        }));
-      } else if (effectiveScope === 'full') {
-        messagesOutput = (fetchResult.messages || []).map((m) => ({
-          id: m.id,
-          subject: m.subject,
-          from: m.from,
-          receivedAt: m.receivedAt,
-          snippet: m.snippet,
-          body: m.textBody || m.snippet || '',
-          textBody: m.textBody || m.snippet || '',
-          htmlBody: m.htmlBody || undefined,
-          hasCode: Boolean(m.codeMatch),
-          extractedCode: m.codeMatch?.code
-        }));
+      diagLogger.info('api', '接收请求', `收到 API Key 邮件拉取请求 (${email}) [范围: ${effectiveScope}, 分支: ${effectiveEngine}]`, { apiKey, clientIp: options.clientIp, traceId }, email, traceId);
+
+      try {
+        const fetchResult = await fetchAccountVerificationCode(accountInput, {
+          lookbackMinutes: typeof options.lookbackMinutes === 'number' ? options.lookbackMinutes : 0,
+          maxMessages: typeof options.maxMessages === 'number' && options.maxMessages > 0 ? options.maxMessages : 10,
+          signal: controller.signal,
+          traceId,
+          scopeMode: effectiveScope,
+          enginePreference: effectiveEngine,
+          onProgress: (state) => {
+            diagLogger.debug('api', `进度: ${state}`, `正在执行 ${state}`, undefined, email, traceId);
+          },
+          resolveMicrosoftAccessToken: () => {
+            throw new Error('OAuth 会话不可用于直接 API Key 调用，请使用 Refresh Token 或应用密码');
+          }
+        });
+
+        clearTimeout(timeout);
+        const durationMs = Date.now() - startTime;
+        const primaryCode = fetchResult.primaryCode;
+        const codeStr = primaryCode ? primaryCode.code : null;
+
+        // Update call count, last used and verified working engine, reset imap_fail_count
+        const nowIso = new Date().toISOString();
+        const confirmedEngine = fetchResult.engineUsed || row.verified_engine || 'imap';
+        db.prepare('UPDATE api_keys SET call_count = call_count + 1, last_used_at = ?, verified_engine = ?, imap_fail_count = 0 WHERE id = ?').run(nowIso, confirmedEngine, row.id);
+
+        // Post-execution quota deduction (Deduct on all successful API calls using a verified token)
+        let tokenInfoPayload: any = undefined;
+        if (verifiedToken) {
+          accessTokenService.consumeQuota(verifiedToken.id);
+          tokenInfoPayload = {
+            name: verifiedToken.name,
+            usedQuota: verifiedToken.usedQuota + 1,
+            totalQuota: verifiedToken.totalQuota,
+            remainingQuota: Math.max(0, verifiedToken.remainingQuota - 1),
+            scopeMode: effectiveScope,
+            enginePreference: effectiveEngine
+          };
+        }
+
+        // Record usage log
+        usageLogger.record({
+          id: traceId,
+          clientIp: options.clientIp,
+          region: options.region,
+          emailAccount: email,
+          provider,
+          sourceMode: 'api_key',
+          status: codeStr ? 'success' : 'no_code',
+          hasCode: Boolean(codeStr),
+          extractedCode: codeStr || undefined,
+          durationMs,
+          messageCount: fetchResult.messages?.length || 0,
+          tokenId: verifiedToken?.id || row.token_id || undefined,
+          token: verifiedToken?.token || row.bound_token || undefined,
+          engine: fetchResult.engineUsed || (provider === 'offilive' ? 'web_rpa' : 'imap')
+        });
+
+        // Construct slim or full response based on effectiveScope
+        let messagesOutput: any = undefined;
+        if (effectiveScope === 'summary') {
+          messagesOutput = (fetchResult.messages || []).map((m) => ({
+            id: m.id,
+            subject: m.subject,
+            from: m.from,
+            receivedAt: m.receivedAt,
+            snippet: m.snippet,
+            hasCode: Boolean(m.codeMatch),
+            extractedCode: m.codeMatch?.code
+          }));
+        } else if (effectiveScope === 'full') {
+          messagesOutput = (fetchResult.messages || []).map((m) => ({
+            id: m.id,
+            subject: m.subject,
+            from: m.from,
+            receivedAt: m.receivedAt,
+            snippet: m.snippet,
+            body: m.textBody || m.snippet || '',
+            textBody: m.textBody || m.snippet || '',
+            htmlBody: m.htmlBody || undefined,
+            hasCode: Boolean(m.codeMatch),
+            extractedCode: m.codeMatch?.code
+          }));
+        }
+
+        const publicResult: ApiKeyPublicResult = {
+          code: 200,
+          success: true,
+          email,
+          provider,
+          verificationCode: codeStr,
+          codeDetails: primaryCode
+            ? {
+                code: primaryCode.code,
+                confidence: primaryCode.confidence,
+                receivedAt: primaryCode.receivedAt,
+                subject: primaryCode.subject,
+                from: primaryCode.from
+              }
+            : null,
+          messageCount: fetchResult.messages?.length || 0,
+          scopeMode: effectiveScope,
+          messages: messagesOutput,
+          tokenInfo: tokenInfoPayload,
+          queriedAt: nowIso,
+          durationMs
+        } as any;
+
+        // Save to cooldown cache
+        apiKeyCooldownCache.set(apiKey, { result: publicResult, timestamp: Date.now() });
+
+        return publicResult;
+      } catch (err: any) {
+        clearTimeout(timeout);
+        const durationMs = Date.now() - startTime;
+        const errMsg = err?.message || '邮件拉取失败';
+
+        // Circuit Breaker: If IMAP fails with deterministic AUTH_FAILED consecutively, trip circuit breaker after 3 times
+        const isAuthFail = err?.code === 'AUTH_FAILED' || err?.message?.includes('AUTH_FAILED') || err?.message?.includes('认证失败') || err?.message?.includes('MAILCOM_IMAP_DISABLED');
+        if (isAuthFail && row.verified_engine === 'imap') {
+          const newFailCount = (row.imap_fail_count || 0) + 1;
+          if (newFailCount >= 3) {
+            // User likely disabled POP3/IMAP in web portal: release IMAP lock back to 'auto'
+            db.prepare("UPDATE api_keys SET verified_engine = 'auto', imap_fail_count = 0 WHERE id = ?").run(row.id);
+            diagLogger.warn('api', '协议熔断自愈', `账号 (${email}) 连续 3 次 IMAP 认证失败，已自动解除 IMAP 锁死标记并重置为自适应模式 (后续可自动降级 Chrome Web RPA)`, undefined, email, traceId);
+          } else {
+            db.prepare('UPDATE api_keys SET imap_fail_count = ? WHERE id = ?').run(newFailCount, row.id);
+            diagLogger.warn('api', 'IMAP 认证失败计数', `账号 (${email}) IMAP 认证失败 (${newFailCount}/3)`, undefined, email, traceId);
+          }
+        }
+
+        usageLogger.record({
+          id: traceId,
+          clientIp: options.clientIp,
+          region: options.region,
+          emailAccount: email,
+          provider,
+          sourceMode: 'api_key',
+          status: 'error',
+          statusDetail: errMsg,
+          hasCode: false,
+          durationMs,
+          messageCount: 0,
+          tokenId: verifiedToken?.id || row.token_id || undefined,
+          token: verifiedToken?.token || row.bound_token || undefined,
+          engine: effectiveEngine === 'web_rpa' ? 'web_rpa' : (provider === 'offilive' ? 'web_rpa' : 'imap')
+        });
+
+        diagLogger.error('api', '拉取失败', errMsg, { error: String(err) }, email);
+        throw err;
       }
+    };
 
-      const publicResult: ApiKeyPublicResult = {
-        code: 200,
-        success: true,
-        email,
-        provider,
-        verificationCode: codeStr,
-        codeDetails: primaryCode
-          ? {
-              code: primaryCode.code,
-              confidence: primaryCode.confidence,
-              receivedAt: primaryCode.receivedAt,
-              subject: primaryCode.subject,
-              from: primaryCode.from
-            }
-          : null,
-        messageCount: fetchResult.messages?.length || 0,
-        scopeMode: effectiveScope,
-        messages: messagesOutput,
-        tokenInfo: tokenInfoPayload,
-        queriedAt: nowIso,
-        durationMs
-      } as any;
-
-      // Save to cooldown cache
-      apiKeyCooldownCache.set(apiKey, { result: publicResult, timestamp: Date.now() });
-
-      return publicResult;
-    } catch (err: any) {
-      clearTimeout(timeout);
-      const durationMs = Date.now() - startTime;
-      const errMsg = err?.message || '邮件拉取失败';
-
-      usageLogger.record({
-        id: traceId,
-        clientIp: options.clientIp,
-        region: options.region,
-        emailAccount: email,
-        provider,
-        sourceMode: 'api_key',
-        status: 'error',
-        statusDetail: errMsg,
-        hasCode: false,
-        durationMs,
-        messageCount: 0,
-        tokenId: verifiedToken?.id || row.token_id || undefined,
-        token: verifiedToken?.token || row.bound_token || undefined,
-        engine: effectiveEngine === 'web_rpa' ? 'web_rpa' : (provider === 'offilive' ? 'web_rpa' : 'imap')
-      });
-
-      diagLogger.error('api', '拉取失败', errMsg, { error: String(err) }, email);
-      throw err;
+    const taskPromise = executeTask();
+    inFlightApiKeyQueries.set(inFlightKey, taskPromise);
+    try {
+      return await taskPromise;
+    } finally {
+      inFlightApiKeyQueries.delete(inFlightKey);
     }
   }
 }
