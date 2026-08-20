@@ -390,7 +390,7 @@ export class AccessTokenService {
     };
   } {
     const page = Math.max(1, params?.page || 1);
-    const pageSize = Math.max(1, Math.min(100, params?.pageSize || 20));
+    const pageSize = Math.max(1, Math.min(10000, params?.pageSize || 20));
     const offset = (page - 1) * pageSize;
     const search = params?.search?.trim() || '';
 

@@ -143,7 +143,7 @@ export const ApiKeyView: React.FC = () => {
 
   const loadAvailableTokens = async () => {
     try {
-      const res = await backyardApi.getTokens({ pageSize: 100 });
+      const res = await backyardApi.getTokens({ pageSize: 1000 });
       const activeTokens = res.items.filter((t) => t.isActive && !t.isExhausted);
       setAvailableTokens(activeTokens);
       if (activeTokens.length > 0 && !importTokenId) {
@@ -350,7 +350,7 @@ export const ApiKeyView: React.FC = () => {
     setExportFormat(format);
     setExporting(true);
     try {
-      const tokenRes = await backyardApi.getTokens({ pageSize: 100 });
+      const tokenRes = await backyardApi.getTokens({ pageSize: 1000 });
       const activeTokens = tokenRes.items.filter((t) => t.isActive && !t.isExhausted);
       setAvailableTokens(activeTokens);
 
