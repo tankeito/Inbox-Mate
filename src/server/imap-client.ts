@@ -99,9 +99,34 @@ export interface FetchAccountResult {
   engineUsed?: 'imap' | 'pop3' | 'web_rpa' | 'graph';
 }
 
+import { db } from './db/database.js';
 import { routeAccountEngine } from './engine-router.js';
 import { fetchAccountVerificationCodeViaWebRpa } from './engines/web-rpa-engine.js';
 import { proxyService } from './services/proxy-service.js';
+
+// In-memory cache of accounts verified to support IMAP/POP3
+export const knownImapCapableAccounts = new Set<string>();
+
+export function isKnownImapCapable(email: string): boolean {
+  if (!email) return false;
+  const norm = email.trim().toLowerCase();
+  if (knownImapCapableAccounts.has(norm)) return true;
+  try {
+    const row = db.prepare(`
+      SELECT id FROM usage_logs 
+      WHERE email_account = ? AND engine = 'imap' AND status IN ('success', 'no_code')
+      ORDER BY created_at DESC LIMIT 1
+    `).get(norm);
+    if (row) {
+      knownImapCapableAccounts.add(norm);
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+// Mailbox-level concurrency mutex to serialize high-frequency requests on the same mailbox
+const mailboxLocks = new Map<string, Promise<void>>();
 
 export async function fetchAccountVerificationCode(account: AccountInput, options: FetchAccountOptions): Promise<FetchAccountResult> {
   const engineType = routeAccountEngine(account, options.enginePreference);
@@ -117,6 +142,18 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
   if (account.auth.type === 'refresh_token') {
     return fetchAccountVerificationCodeViaGraph(account, options);
   }
+
+  const emailKey = (account.email || '').trim().toLowerCase();
+  const prevMailboxLock = mailboxLocks.get(emailKey);
+  if (prevMailboxLock) {
+    // Wait for prior request on the same mailbox to release its socket, max 3000ms
+    await Promise.race([prevMailboxLock, new Promise((r) => setTimeout(r, 3000))]);
+  }
+  let releaseMailboxLock: (() => void) | undefined;
+  const currentMailboxLock = new Promise<void>((resolve) => {
+    releaseMailboxLock = resolve;
+  });
+  mailboxLocks.set(emailKey, currentMailboxLock);
 
   const provider = PROVIDER_REGISTRY[account.provider];
   const host = account.customHost || provider?.host || `imap.${account.email.split('@')[1]}`;
@@ -160,7 +197,7 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
       await client.connect();
     } catch (connectErr: any) {
       if (activeProxy && !options.signal.aborted) {
-        // Fallback: If proxy failed or dropped connection, log and retry directly
+        // Fallback 1: If proxy failed or dropped connection, log and retry directly
         try {
           proxyService.recordTraffic({
             proxyId: activeProxy.id,
@@ -170,6 +207,26 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
         } catch {
           // ignore
         }
+        client = new ImapFlow({
+          host,
+          port,
+          secure: true,
+          servername: host,
+          tls: {
+            rejectUnauthorized: false,
+            minVersion: 'TLSv1.2'
+          },
+          auth,
+          disableAutoIdle: true,
+          connectionTimeout,
+          greetingTimeout: connectionTimeout,
+          socketTimeout: connectionTimeout + 5000,
+          logger: false
+        });
+        await client.connect();
+      } else if (isKnownImapCapable(account.email) && !options.signal.aborted) {
+        // Fallback 2: Known IMAP capable account with direct connection hiccup - retry after brief pause
+        await new Promise((r) => setTimeout(r, 400));
         client = new ImapFlow({
           host,
           port,
@@ -289,16 +346,21 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
     }
 
     const primaryCode = matches.sort((left, right) => right.score - left.score || Date.parse(right.receivedAt) - Date.parse(left.receivedAt))[0];
+    knownImapCapableAccounts.add(emailKey);
     return { messages: emailItems, primaryCode, engineUsed: 'imap' };
   } catch (error) {
     const classified = error instanceof InboxMateError ? error.code : classifyImapError(error, options.signal.aborted);
+    const isMailCom = account.provider === 'mailcom' || isMailComDomain(account.email.split('@')[1]);
+    const isExplicitImap = options.enginePreference === 'imap_pop3' || account.enginePreference === 'imap_pop3';
+    const isKnownImap = isKnownImapCapable(account.email);
 
-    if (
-      (account.provider === 'mailcom' || isMailComDomain(account.email.split('@')[1])) &&
-      (classified === 'AUTH_FAILED' || classified === 'TIMEOUT' || classified === 'CONNECTION_FAILED')
-    ) {
-      const isExplicitImap = options.enginePreference === 'imap_pop3' || account.enginePreference === 'imap_pop3';
-
+    // Fallback to Chrome RPA ONLY when:
+    // 1. Account belongs to Mail.com domain family
+    // 2. User/Token has NOT forced imap_pop3 mode
+    // 3. The account is NOT an already known IMAP-capable account
+    // 4. The failure is strictly AUTH_FAILED (meaning POP3/IMAP access is denied in web settings)
+    //    (NEVER drop to Chrome RPA for transient network TIMEOUT or CONNECTION_FAILED!)
+    if (isMailCom && !isExplicitImap && !isKnownImap && classified === 'AUTH_FAILED') {
       try {
         const pop3Account: AccountInput = {
           ...account,
@@ -306,17 +368,10 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
           customPort: account.customPort || 995,
           customProtocol: 'pop3'
         };
-        return await fetchAccountVerificationCodeViaPop3(pop3Account, options);
+        const popRes = await fetchAccountVerificationCodeViaPop3(pop3Account, options);
+        knownImapCapableAccounts.add(emailKey);
+        return popRes;
       } catch (popErr: any) {
-        if (isExplicitImap) {
-          throw new InboxMateError(
-            'MAILCOM_IMAP_DISABLED',
-            401,
-            'Mail.com 账号认证失败：未在网页端开启【POP3 & IMAP Access】选项，或应用密码不正确。'
-          );
-        }
-
-        // Smart Auto Fallback: Seamlessly fall back to Chrome Web RPA
         if (!options.signal.aborted) {
           options.onProgress('connecting');
           return await fetchAccountVerificationCodeViaWebRpa(account, options);
@@ -328,6 +383,10 @@ export async function fetchAccountVerificationCode(account: AccountInput, option
     throw new InboxMateError(classified);
   } finally {
     options.signal.removeEventListener('abort', closeOnAbort);
+    releaseMailboxLock?.();
+    if (mailboxLocks.get(emailKey) === currentMailboxLock) {
+      mailboxLocks.delete(emailKey);
+    }
     try {
       lock?.release();
     } catch {
