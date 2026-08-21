@@ -109,4 +109,41 @@ describe('JobManager', () => {
     expect(updatedToken?.usedQuota).toBe(1);
     expect(updatedToken?.remainingQuota).toBe(9);
   });
+
+  it('allows a single RPA account without a Token but protects RPA batches', async () => {
+    const runner = async (): Promise<CodeMatch> => ({
+      code: '654321',
+      confidence: 'high',
+      score: 90,
+      receivedAt: new Date().toISOString(),
+      reason: ['digits']
+    });
+    const manager = new JobManager(runner as never);
+    const mailCom: AccountInput = {
+      clientAccountId: 'acc-single-mailcom',
+      email: 'single@mail.com',
+      provider: 'mailcom',
+      auth: { type: 'app_password', secret: 'secret' }
+    };
+
+    const singleJob = manager.create({
+      accounts: [mailCom],
+      lookbackMinutes: 0,
+      maxMessagesPerAccount: 5
+    });
+    await eventually(() => expect(manager.get(singleJob.jobId)?.state).toBe('completed'));
+
+    const standardBatchJob = manager.create({
+      accounts: [account, { ...account, clientAccountId: 'acc-batch-gmx-2', email: 'second@gmx.com' }],
+      lookbackMinutes: 0,
+      maxMessagesPerAccount: 5
+    });
+    await eventually(() => expect(manager.get(standardBatchJob.jobId)?.state).toBe('completed'));
+
+    expect(() => manager.create({
+      accounts: [mailCom, { ...account, clientAccountId: 'acc-batch-gmx' }],
+      lookbackMinutes: 0,
+      maxMessagesPerAccount: 5
+    })).toThrowError(/需要授权 Token/);
+  });
 });

@@ -1063,7 +1063,7 @@ export function App() {
       notify('error', '批量导入包含 Web RPA 邮箱（Mail.com / OffiLive），请先配置并验证授权 Token。');
       return;
     }
-    if (hasRpa && accessToken && tokenInfo && tokenInfo.remainingQuota <= 0) {
+    if (accounts.length > 1 && hasRpa && accessToken && tokenInfo && tokenInfo.remainingQuota <= 0) {
       notify('error', '当前 Token 额度已耗尽，请联系管理员充值后再使用。');
       return;
     }

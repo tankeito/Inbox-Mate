@@ -140,20 +140,36 @@ export class JobManager {
     const tokenStr = (input.token || meta?.token || '').trim();
     let verifiedTokenId: string | undefined;
 
-    const hasMailCom = input.accounts.some((acc) => {
-      return acc.provider === 'mailcom' || routeAccountEngine(acc) === 'web_rpa';
+    const hasRpaAccount = input.accounts.some((acc) => {
+      const email = acc.email.trim().toLowerCase();
+      return (
+        acc.provider === 'mailcom' ||
+        acc.provider === 'offilive' ||
+        routeAccountEngine(acc) === 'web_rpa' ||
+        email.endsWith('@mail.com') ||
+        email.endsWith('@cheerful.com') ||
+        email.endsWith('@offilive.com') ||
+        email.endsWith('@offidocs.com') ||
+        email.endsWith('@onworks.net')
+      );
     });
+    // Token authorization is a batch-only control for browser/RPA providers.
+    // A single account may always be tested directly, even without a Token.
+    const requiresRpaToken = input.accounts.length > 1 && hasRpaAccount;
 
-    if (tokenStr) {
+    if (requiresRpaToken && !tokenStr) {
+      throw new InboxMateError('AUTH_FAILED', 403, '批量抓取 Mail.com / OffiLive 账号需要授权 Token');
+    }
+
+    if (requiresRpaToken && tokenStr) {
       const check = accessTokenService.verifyTokenAccess(tokenStr);
       if (!check.valid) {
-        if (hasMailCom) {
-          throw new InboxMateError('AUTH_FAILED', 403, check.reason || 'Token 无效或额度已用尽');
-        }
-      } else {
-        verifiedTokenId = check.token?.id;
+        throw new InboxMateError('AUTH_FAILED', 403, check.reason || 'Token 无效或额度已用尽');
       }
+      verifiedTokenId = check.token?.id;
     }
+
+    const effectiveJobToken = requiresRpaToken ? tokenStr : undefined;
 
     const now = new Date();
     const job: JobRuntime = {
@@ -163,7 +179,7 @@ export class JobManager {
       updatedAt: now,
       clientIp: meta?.clientIp || '127.0.0.1',
       region: meta?.region,
-      token: tokenStr || undefined,
+      token: effectiveJobToken,
       tokenId: verifiedTokenId,
       accounts: input.accounts.map((account) => ({
         input: account,
@@ -316,16 +332,21 @@ export class JobManager {
         account.snapshot.error = (messages && messages.length > 0) || primaryCode ? undefined : safeError('NO_MATCH');
         this.setAccountState(job, account, 'completed');
 
-        // Post-execution quota deduction: Only consume when fetch succeeded for Mail.com RPA
-        const isMailComAccount = (
+        // Post-execution quota deduction: only batch RPA calls consume Token quota.
+        const isRpaAccount = (
           provider === 'mailcom' ||
           account.input?.provider === 'mailcom' ||
+          provider === 'offilive' ||
+          account.input?.provider === 'offilive' ||
           email.endsWith('@mail.com') ||
           email.endsWith('@cheerful.com') ||
+          email.endsWith('@offilive.com') ||
+          email.endsWith('@offidocs.com') ||
+          email.endsWith('@onworks.net') ||
           (account.input ? routeAccountEngine(account.input) === 'web_rpa' : false)
         );
 
-        if (job.tokenId && isMailComAccount) {
+        if (job.accounts.length > 1 && job.tokenId && isRpaAccount) {
           accessTokenService.consumeQuota(job.tokenId);
         }
 
