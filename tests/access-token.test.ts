@@ -145,6 +145,42 @@ describe('Access Token Service & Quota Management', () => {
     expect(formattedWithToken).toContain('API：https://example.com/api/im_testkey12345678?token=tok_mysecrettoken999');
   });
 
+  it('requires an explicitly supplied Token bound to the API Key', () => {
+    const token = accessTokenService.createToken({
+      name: 'API Key 强制鉴权测试Token',
+      totalQuota: 10
+    });
+    const imported = apiKeyService.batchImport('api_auth_test@mail.com----password123', {
+      tokenId: token.id,
+      batchName: 'API Key 强制鉴权测试'
+    });
+    const key = imported.keys[0];
+    expect(key).toBeDefined();
+
+    expect(() => apiKeyService.validateApiKeyToken(key.apiKey)).toThrowError(/缺少访问 Token 凭据/);
+
+    const otherToken = accessTokenService.createToken({
+      name: 'API Key 错误绑定测试Token',
+      totalQuota: 10
+    });
+    expect(() => apiKeyService.validateApiKeyToken(key.apiKey, otherToken.token)).toThrowError(/不匹配/);
+
+    const verified = apiKeyService.validateApiKeyToken(key.apiKey, token.token);
+    expect(verified.id).toBe(token.id);
+  });
+
+  it('rejects API Keys without a bound Token', () => {
+    const imported = apiKeyService.batchImport('api_unbound_test@mail.com----password123', {
+      batchName: 'API Key 未绑定鉴权测试'
+    });
+    const key = imported.keys[0];
+    const token = accessTokenService.createToken({
+      name: 'API Key 未绑定鉴权测试Token',
+      totalQuota: 10
+    });
+    expect(() => apiKeyService.validateApiKeyToken(key.apiKey, token.token)).toThrowError(/尚未绑定/);
+  });
+
   it('retrieves detailed usage consumption logs for a token with stats and status filtering', () => {
     const token = accessTokenService.createToken({
       name: '日志分类测试Token',

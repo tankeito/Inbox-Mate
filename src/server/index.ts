@@ -201,6 +201,21 @@ export function createServer(port = PORT) {
       }
     }
 
+    if (!tokenStr) {
+      if (format === 'code' || format === 'text') {
+        res.status(401).setHeader('Content-Type', 'text/plain; charset=utf-8').send('TOKEN_REQUIRED: 缺少访问 Token 凭据');
+        return;
+      }
+      res.status(401).json({
+        code: 401,
+        success: false,
+        error: 'TOKEN_REQUIRED',
+        message: '缺少访问 Token 凭据，请通过 ?token=、X-Access-Token 或 Bearer Token 提供',
+        queriedAt: new Date().toISOString()
+      });
+      return;
+    }
+
     let verifiedToken: any = null;
     if (tokenStr) {
       const verifyResult = accessTokenService.verifyTokenAccess(tokenStr);
@@ -214,7 +229,6 @@ export function createServer(port = PORT) {
           success: false,
           error: 'TOKEN_INVALID_OR_EXHAUSTED',
           message: verifyResult.reason,
-          token: tokenStr,
           queriedAt: new Date().toISOString()
         });
         return;
@@ -241,14 +255,18 @@ export function createServer(port = PORT) {
 
       res.json(result);
     } catch (err: any) {
+      const tokenErrorCodes = new Set(['TOKEN_REQUIRED', 'TOKEN_INVALID_OR_EXHAUSTED', 'TOKEN_NOT_BOUND', 'TOKEN_MISMATCH']);
+      const errorCode = typeof err?.code === 'string' && tokenErrorCodes.has(err.code) ? err.code : undefined;
+      const errorStatus = errorCode === 'TOKEN_REQUIRED' ? 401 : errorCode ? 403 : 400;
       if (format === 'code' || format === 'text') {
-        res.status(400).setHeader('Content-Type', 'text/plain; charset=utf-8').send(`ERROR: ${err.message || 'Fetch failed'}`);
+        res.status(errorStatus).setHeader('Content-Type', 'text/plain; charset=utf-8').send(`${errorCode || 'ERROR'}: ${err.message || 'Fetch failed'}`);
         return;
       }
-      res.status(400).json({
-        code: 400,
+      res.status(errorStatus).json({
+        code: errorStatus,
         success: false,
-        error: err.message || '邮件拉取失败',
+        error: errorCode || 'API_FETCH_FAILED',
+        message: err.message || '邮件拉取失败',
         queriedAt: new Date().toISOString()
       });
     }

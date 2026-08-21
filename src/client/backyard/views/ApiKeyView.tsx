@@ -173,9 +173,7 @@ export const ApiKeyView: React.FC = () => {
     loadAvailableTokens();
   }, []);
 
-  const handleCopyUrl = (apiKey: string) => {
-    const origin = window.location.origin;
-    const url = `${origin}/api/${apiKey}`;
+  const handleCopyUrl = (apiKey: string, url: string) => {
     navigator.clipboard.writeText(url);
     setCopiedKey(apiKey);
     setTimeout(() => setCopiedKey(null), 2000);
@@ -759,7 +757,7 @@ export const ApiKeyView: React.FC = () => {
                             /api/{item.apiKey}{tokenQuery}
                           </code>
                           <button
-                            onClick={() => handleCopyUrl(item.apiKey)}
+                            onClick={() => handleCopyUrl(item.apiKey, fullUrl)}
                             className="by-btn by-btn-secondary by-btn-sm"
                             style={{ padding: '3px 8px', fontSize: '0.74rem' }}
                             title="复制完整 API URL"

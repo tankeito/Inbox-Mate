@@ -407,12 +407,17 @@ export function createBackyardRouter(): express.Router {
       const apiKey = firstParam(req.params.apiKey);
       const clientIp = getClientIp(req);
       const region = resolveIpRegion(clientIp);
+      const keyRecord = apiKeyService.getRawKeyRecord(apiKey);
+      if (!keyRecord) {
+        return res.status(404).json({ error: 'API Key 不存在或已失效' });
+      }
 
       const result = await apiKeyService.executeApiKeyFetch(apiKey, {
         lookbackMinutes: 0,
         maxMessages: 10,
         clientIp,
-        region
+        region,
+        token: keyRecord.bound_token || undefined
       });
 
       res.json(result);

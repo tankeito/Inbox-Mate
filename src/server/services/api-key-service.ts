@@ -130,6 +130,18 @@ const apiKeyCooldownCache = new Map<string, { result: ApiKeyPublicResult; timest
 const inFlightApiKeyQueries = new Map<string, Promise<ApiKeyPublicResult>>();
 const API_COOLDOWN_MS = 8000;
 
+type ApiKeyTokenErrorCode =
+  | 'TOKEN_REQUIRED'
+  | 'TOKEN_INVALID_OR_EXHAUSTED'
+  | 'TOKEN_NOT_BOUND'
+  | 'TOKEN_MISMATCH';
+
+function createApiKeyTokenError(code: ApiKeyTokenErrorCode, message: string): Error & { code: ApiKeyTokenErrorCode } {
+  const error = new Error(message) as Error & { code: ApiKeyTokenErrorCode };
+  error.code = code;
+  return error;
+}
+
 export class ApiKeyService {
   public generateKeyString(): string {
     return `im_${randomBytes(18).toString('base64url').replace(/[^a-zA-Z0-9]/g, '')}`;
@@ -412,6 +424,38 @@ export class ApiKeyService {
     return stmt.get(apiKey);
   }
 
+  /**
+   * Validate the caller's Token against the API Key binding.
+   * Public API callers must always provide the Token explicitly; the stored
+   * binding is used only to compare the supplied credential, never as a fallback.
+   */
+  public validateApiKeyToken(apiKey: string, token?: string): NonNullable<ReturnType<typeof accessTokenService.getTokenByString>> {
+    const row = this.getRawKeyRecord(apiKey);
+    if (!row) {
+      throw new Error('API Key 不存在或已失效');
+    }
+
+    const suppliedToken = typeof token === 'string' ? token.trim() : '';
+    if (!suppliedToken) {
+      throw createApiKeyTokenError('TOKEN_REQUIRED', '缺少访问 Token 凭据');
+    }
+
+    const check = accessTokenService.verifyTokenAccess(suppliedToken);
+    if (!check.valid || !check.token) {
+      throw createApiKeyTokenError('TOKEN_INVALID_OR_EXHAUSTED', check.reason || '访问 Token 无效或已耗尽');
+    }
+
+    if (!row.bound_token) {
+      throw createApiKeyTokenError('TOKEN_NOT_BOUND', '此 API Key 尚未绑定授权 Token');
+    }
+
+    if (row.bound_token !== suppliedToken) {
+      throw createApiKeyTokenError('TOKEN_MISMATCH', '访问 Token 与此 API Key 不匹配');
+    }
+
+    return check.token;
+  }
+
   public toggleKeyActive(id: string, active: boolean): void {
     const now = new Date().toISOString();
     db.prepare('UPDATE api_keys SET is_active = ?, updated_at = ? WHERE id = ?').run(
@@ -553,21 +597,10 @@ export class ApiKeyService {
       throw new Error('此 API Key 已超过有效期');
     }
 
-    // Determine active Token: query token takes precedence, followed by bound token
-    const activeTokenStr = (options.token || row.bound_token || '').trim();
-    let verifiedToken: any = null;
-
-    if (activeTokenStr) {
-      const check = accessTokenService.verifyTokenAccess(activeTokenStr);
-      if (!check.valid) {
-        // If mailcom or offilive, strictly require valid token
-        if (row.provider === 'mailcom' || row.provider === 'offilive') {
-          throw new Error(check.reason || '关联的授权 Token 额度已用尽或已被冻结');
-        }
-      } else {
-        verifiedToken = check.token;
-      }
-    }
+    // Public callers must provide the bound Token explicitly. Never fall back
+    // to row.bound_token, otherwise the API Key alone bypasses Token access control.
+    const activeTokenStr = typeof options.token === 'string' ? options.token.trim() : '';
+    const verifiedToken = this.validateApiKeyToken(apiKey, activeTokenStr);
 
     // Determine effective Scope according to Least Privilege Principle (Token max privilege is the hard ceiling)
     const tokenMaxScope: 'code_only' | 'summary' | 'full' = verifiedToken?.scopeMode || 'full';
