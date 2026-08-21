@@ -121,10 +121,14 @@ export class JobManager {
   }
 
   applySettings(settings: SystemConcurrencySettings): void {
-    this.globalLimit = pLimit(settings.concurrencyGlobalMax);
-    this.rpaLimit = pLimit(settings.concurrencyRpaMax);
+    // Keep the existing limiter instances so pending work follows a hot-reloaded
+    // concurrency value instead of remaining trapped in the old queue.
+    this.globalLimit.concurrency = settings.concurrencyGlobalMax;
+    this.rpaLimit.concurrency = settings.concurrencyRpaMax;
     this.providerLimitVal = settings.concurrencyProviderMax;
-    this.providerLimits.clear();
+    for (const limit of this.providerLimits.values()) {
+      limit.concurrency = settings.concurrencyProviderMax;
+    }
     this.accountTimeoutMs = settings.timeoutAccountSec * 1000;
     this.rpaTimeoutMs = settings.timeoutRpaSec * 1000;
     this.jobTimeoutMs = settings.timeoutJobSec * 1000;

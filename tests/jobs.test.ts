@@ -146,4 +146,91 @@ describe('JobManager', () => {
       maxMessagesPerAccount: 5
     })).toThrowError(/需要授权 Token/);
   });
+
+  it('runs standard IMAP accounts concurrently up to the configured provider limit', async () => {
+    let active = 0;
+    let peakActive = 0;
+    const runner = async (): Promise<CodeMatch> => {
+      active += 1;
+      peakActive = Math.max(peakActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      active -= 1;
+      return {
+        code: '112233',
+        confidence: 'high',
+        score: 90,
+        receivedAt: new Date().toISOString(),
+        reason: ['digits']
+      };
+    };
+    const manager = new JobManager(runner as never);
+    manager.applySettings({
+      concurrencyRpaMax: 1,
+      concurrencyProviderMax: 3,
+      concurrencyGlobalMax: 10,
+      timeoutAccountSec: 30,
+      timeoutRpaSec: 30,
+      timeoutJobSec: 60,
+      apiCooldownMs: 0
+    });
+
+    const accounts = Array.from({ length: 8 }, (_, index) => ({
+      ...account,
+      clientAccountId: `acc-imap-${index}`,
+      email: `imap-${index}@gmx.com`
+    }));
+    const job = manager.create({ accounts, lookbackMinutes: 0, maxMessagesPerAccount: 1 });
+    await eventually(() => expect(manager.get(job.jobId)?.state).toBe('completed'));
+
+    expect(peakActive).toBe(3);
+  });
+
+  it('applies a higher provider limit to accounts already waiting in the queue', async () => {
+    let active = 0;
+    let peakActive = 0;
+    const runner = async (): Promise<CodeMatch> => {
+      active += 1;
+      peakActive = Math.max(peakActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      active -= 1;
+      return {
+        code: '445566',
+        confidence: 'high',
+        score: 90,
+        receivedAt: new Date().toISOString(),
+        reason: ['digits']
+      };
+    };
+    const manager = new JobManager(runner as never);
+    manager.applySettings({
+      concurrencyRpaMax: 1,
+      concurrencyProviderMax: 1,
+      concurrencyGlobalMax: 10,
+      timeoutAccountSec: 30,
+      timeoutRpaSec: 30,
+      timeoutJobSec: 60,
+      apiCooldownMs: 0
+    });
+
+    const accounts = Array.from({ length: 6 }, (_, index) => ({
+      ...account,
+      clientAccountId: `acc-hot-reload-${index}`,
+      email: `hot-reload-${index}@gmx.com`
+    }));
+    const job = manager.create({ accounts, lookbackMinutes: 0, maxMessagesPerAccount: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    manager.applySettings({
+      concurrencyRpaMax: 1,
+      concurrencyProviderMax: 3,
+      concurrencyGlobalMax: 10,
+      timeoutAccountSec: 30,
+      timeoutRpaSec: 30,
+      timeoutJobSec: 60,
+      apiCooldownMs: 0
+    });
+
+    await eventually(() => expect(manager.get(job.jobId)?.state).toBe('completed'));
+    expect(peakActive).toBe(3);
+  });
 });

@@ -833,7 +833,8 @@ export function App() {
   // Stats calculation
   const stats = useMemo(() => {
     const totalAccounts = accounts.length;
-    const activeAccounts = accounts.filter((account) => ['queued', 'connecting', 'searching'].includes(account.status)).length;
+    const activeAccounts = accounts.filter((account) => ['connecting', 'searching'].includes(account.status)).length;
+    const queuedAccounts = accounts.filter((account) => account.status === 'queued').length;
     const completedAccounts = accounts.filter((account) => ['found', 'no_code', 'failed', 'cancelled'].includes(account.status)).length;
     const failedAccounts = accounts.filter((account) => account.status === 'failed').length;
 
@@ -858,6 +859,7 @@ export function App() {
     return {
       totalAccounts,
       activeAccounts,
+      queuedAccounts,
       completedAccounts,
       failedAccounts,
       totalMails,
@@ -2235,6 +2237,9 @@ name@mail.ru----外置应用专用密码`}
                       <LoaderCircle size={11} className="spin-fast" /> 进行中: {stats.activeAccounts}
                     </span>
                   )}
+                  {stats.queuedAccounts > 0 && (
+                    <span className="ribbon-queued-pill">排队中: {stats.queuedAccounts}</span>
+                  )}
                 </span>
               </div>
 
@@ -2328,6 +2333,9 @@ name@mail.ru----外置应用专用密码`}
                         <span className="active-working-tag">
                           <LoaderCircle size={10} className="spin-fast" /> 进行中: {stats.activeAccounts}
                         </span>
+                      )}
+                      {stats.queuedAccounts > 0 && (
+                        <span className="queued-working-tag">排队中: {stats.queuedAccounts}</span>
                       )}
                     </span>
                     <span className="progress-stat-right">
